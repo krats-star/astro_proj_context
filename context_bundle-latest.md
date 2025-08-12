@@ -1,17 +1,17 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-12 16:15:10Z UTC**
-- Commit: `402e823c2bf34ef0966821c0a5d1a83abc7fbfec`
+- Generated: **2025-08-12 16:57:52Z UTC**
+- Commit: `02589147c8c1b9049b8889bc3bb3201b0e56671b`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
 
 
 1. [api_routes.py](#api_routespy)
-2. [analysis_engine.py](#analysis_enginepy)
-3. [astrological_evaluator.py](#astrological_evaluatorpy)
-4. [ashtakavarga_engine.py](#ashtakavarga_enginepy)
+2. [models.py](#modelspy)
+3. [analysis_engine.py](#analysis_enginepy)
+4. [astrological_evaluator.py](#astrological_evaluatorpy)
 5. [rohini_engine.py](#rohini_enginepy)
 6. [orchestration_engine.py](#orchestration_enginepy)
 7. [astrological_constants.py](#astrological_constantspy)
@@ -56,6 +56,162 @@ def generate_kundli():
     except Exception as e:
         db.session.rollback() # Rollback in case of error
         return jsonify({"error": str(e)}), 500
+```
+
+### models.py
+
+
+```python
+from extensions import db
+from sqlalchemy.dialects.postgresql import JSONB
+from datetime import datetime, timezone
+from extensions import db
+from werkzeug.security import generate_password_hash, check_password_hash
+
+class SocialPost(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    source_platform = db.Column(db.String(50), nullable=False)
+    unique_post_id = db.Column(db.String(255), unique=True, nullable=False)
+    direct_url = db.Column(db.String(500), nullable=False)
+    author = db.Column(db.String(100), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    image_url = db.Column(db.String(500), nullable=True)
+    original_timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    analysis_status = db.Column(db.String(50), default='pending', nullable=False)
+    sentiment = db.Column(db.String(50), nullable=True)
+
+    def __repr__(self):
+        return f"<SocialPost {self.unique_post_id}>"
+
+class Keyword(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    term = db.Column(db.String(100), unique=True, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+
+    def __repr__(self):
+        return f"<Keyword {self.term}>"
+
+class DataSource(db.Model):
+    __tablename__ = 'data_source'
+    id = db.Column(db.Integer, primary_key=True)
+    platform = db.Column(db.String(50), nullable=False)
+    identifier = db.Column(db.String(255), unique=True, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+
+    def __repr__(self):
+        return f"<DataSource {self.platform}:{self.identifier}>"
+
+class Video(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    video_id = db.Column(db.String(120), unique=True, nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    channel_id = db.Column(db.String(120), nullable=False)
+    published_at = db.Column(db.DateTime, nullable=False)
+    status = db.Column(db.String(50), default='pending', nullable=False)
+
+import uuid
+
+class UserChart(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=False)
+    relation_type = db.Column(db.String(50), nullable=False, default='self') # New column for family charts
+    birth_data = db.Column(db.JSON, nullable=False)
+    chart_json = db.Column(JSONB, nullable=False)
+    is_astrologer = db.Column(db.Boolean, default=False, nullable=False)
+    astrologer_id = db.Column(db.String(36), db.ForeignKey('astrologer_profile.id'), nullable=True) # FK to astrologer_profiles.id
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (db.UniqueConstraint('user_id', 'relation_type', name='_user_relation_uc'),)
+
+    def __repr__(self):
+        return f"<UserChart {self.id} for User {self.user_id}>"
+
+class AdminUser(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128), nullable=False)
+    role = db.Column(db.String(50), nullable=False, default='admin')
+    permissions = db.Column(db.String(255), nullable=False, default='all')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+    def __repr__(self):
+        return f'<AdminUser {self.email}>'
+
+class AstrologerProfile(db.Model):
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4())) # UUID for PK
+    user_chart_id = db.Column(db.Integer, db.ForeignKey('user_chart.id'), nullable=False, unique=True)
+    bio = db.Column(db.Text, nullable=True)
+    specializations = db.Column(db.ARRAY(db.String), nullable=True) # Text array
+    consultation_fee = db.Column(db.Numeric, nullable=True)
+    availability = db.Column(db.JSON, nullable=True) # JSONB
+    status = db.Column(db.String(50), default='active', nullable=False)
+
+    def __repr__(self):
+        return f'<AstrologerProfile {self.user_id}>'
+
+class AstrologerApplication(db.Model):
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4())) # UUID for PK
+    user_chart_id = db.Column(db.Integer, db.ForeignKey('user_chart.id'), nullable=False, unique=True)
+    application_data = db.Column(db.JSON, nullable=False) # JSONB
+    status = db.Column(db.String(50), default='pending', nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    def __repr__(self):
+        return f'<AstrologerApplication {self.user_id}>'
+
+class ConsultationHistory(db.Model):
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4())) # UUID for PK
+    astrologer_id = db.Column(db.String(36), db.ForeignKey('astrologer_profile.id'), nullable=False)
+    client_user_chart_id = db.Column(db.Integer, db.ForeignKey('user_chart.id'), nullable=False)
+    date = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    duration = db.Column(db.Integer, nullable=False) # in minutes
+    total_fee = db.Column(db.Numeric, nullable=False)
+    platform_commission = db.Column(db.Numeric, nullable=False)
+    astrologer_payout = db.Column(db.Numeric, nullable=False)
+
+    def __repr__(self):
+        return f'<ConsultationHistory {self.id}>'
+
+class KnowledgeBaseSystems(db.Model):
+    __tablename__ = 'knowledge_base_systems'
+    system_name = db.Column(db.String(255), primary_key=True)
+    data_en = db.Column(JSONB, nullable=False)
+    data_hi = db.Column(JSONB, nullable=False)
+    data_hinglish = db.Column(JSONB, nullable=False)
+
+    def __repr__(self):
+        return f'<KnowledgeBaseSystems {self.system_name}>'
+
+class KnowledgeBaseInterpretations(db.Model):
+    __tablename__ = 'knowledge_base_interpretations'
+    category = db.Column(db.Text, nullable=False)
+    key = db.Column(db.Text, nullable=False)
+    data_en = db.Column(JSONB, nullable=False)
+    data_hi = db.Column(JSONB, nullable=False)
+    data_hinglish = db.Column(JSONB, nullable=False)
+
+    __table_args__ = (db.PrimaryKeyConstraint('category', 'key', name='pk_knowledge_base_interpretations'),)
+
+    def __repr__(self):
+        return f'<KnowledgeBaseInterpretations {self.category} - {self.key}>'
+
+class LLMPrompts(db.Model):
+    __tablename__ = 'llm_prompts'
+    prompt_id = db.Column(db.String(255), primary_key=True)
+    trigger_type = db.Column(db.Text, nullable=False)
+    template_en = db.Column(db.Text, nullable=False)
+    template_hi = db.Column(db.Text, nullable=False)
+    template_hinglish = db.Column(db.Text, nullable=False)
+
+    def __repr__(self):
+        return f'<LLMPrompts {self.prompt_id}>'
 ```
 
 ### analysis_engine.py
@@ -899,225 +1055,6 @@ def get_aspects_on_house(target_house, kundli):
                 aspecting_planets.append(p_name)
 
     return list(set(aspecting_planets))
-```
-
-### ashtakavarga_engine.py
-
-
-```python
-# ashtakavarga_engine.py
-# -------------------------------------------------------------------
-# Bhinnashtakavarga (BAV) + Sarvashtakavarga (SAV) for North-Indian Vedic
-# - Uses classical rule matrices (Parashara/Phaladeepika lineage).
-# - Inputs: kundli dict from rohini_engine.generate_full_kundli(...)
-# - Outputs:
-#     {
-#       "bhinnashtakavarga": {
-#          "sun":    {"Aries": x, "Taurus": y, ... "Pisces": z},
-#          "moon":   {...}, ...
-#          "saturn": {...}
-#       },
-#       "sarvashtakavarga": {"Aries": S, ... "Pisces": S}
-#     }
-# Notes:
-#   • Lagna is a *contributor* to each planet’s BAV, but SAV is a sum of the 7
-#     planets only (Sun..Saturn), not Lagna.
-#   • Signs are the 12 whole signs (sidereal, Lahiri), matching your engine.
-# -------------------------------------------------------------------
-
-from typing import Dict, List
-import astrological_constants as ac
-
-SIGNS = ac.SIGNS  # ["Aries", ... "Pisces"]
-
-def _sign_index(sign_name: str) -> int:
-    """0..11 index from sign name."""
-    return SIGNS.index(sign_name)
-
-def _wrap12(n: int) -> int:
-    return ((n - 1) % 12) + 1  # keep 1..12
-
-def _rel_house(from_index: int, to_index: int) -> int:
-    """
-    Relative house number (1..12) of 'to_index' FROM 'from_index'.
-    Example: from Aries(0) to Aries(0) => 1; from Aries(0) to Taurus(1) => 2; ...
-    """
-    return ((to_index - from_index) % 12) + 1
-
-# -------------------------------------------------------------------
-# Classical Bhinnashtakavarga rule matrices
-# Each planet P has a dict: contributor -> set of relative houses (1..12)
-# meaning "P gives a bindu in those houses counted FROM that contributor".
-# Sources cross-checked from Brihat Jataka/Phaladeepika-style lists.
-# -------------------------------------------------------------------
-
-BAV_RULES: Dict[str, Dict[str, set]] = {
-    # --- SUN ---
-    "sun": {
-        "sun":    {1,2,4,7,8,9,10,11},
-        "moon":   {3,6,10,11},
-        "mars":   {1,2,4,7,8,9,10,11},
-        "mercury":{3,5,6,9,10,11,12},
-        "jupiter":{5,6,9,11},
-        "venus":  {6,7,12},
-        "saturn": {1,2,4,7,8,9,10,11},
-        "lagna":  {3,4,6,10,11,12}
-    },
-
-    # --- MOON ---
-    "moon": {
-        "sun":    {3,6,7,8,10,11},
-        "moon":   {1,3,6,7,10,11},
-        "mars":   {2,3,5,6,9,10,11},
-        "mercury":{1,3,4,5,7,8,10,11},
-        "jupiter":{1,4,7,8,10,11,12},
-        "venus":  {3,4,5,7,9,10,11},
-        "saturn": {3,5,6,11},
-        "lagna":  {3,6,10,11}
-    },
-
-    # --- MARS ---
-    "mars": {
-        "sun":    {3,5,6,10,11},
-        "moon":   {3,6,11},
-        "mars":   {1,2,4,7,8,10,11},
-        "mercury":{3,5,6,11},
-        "jupiter":{6,10,11,12},
-        "venus":  {6,8,11,12},
-        "saturn": {10,11},
-        "lagna":  {1,3,6,10,11}
-    },
-
-    # --- MERCURY ---
-    "mercury": {
-        "sun":    {5,6,9,11,12},
-        "moon":   {2,4,6,8,10,11},
-        "mars":   {1,2,4,7,8,9,10,11},
-        "mercury":{1,3,5,6,7,10,11,12},
-        "jupiter":{6,8,11,12},
-        "venus":  {1,2,3,4,5,8,9,11},
-        "saturn": {1,2,4,7,8,9,10,11},
-        "lagna":  {1,2,4,6,8,10,11}
-    },
-
-    # --- JUPITER ---
-    "jupiter": {
-        "sun":    {1,2,3,4,7,8,9,10,11},
-        "moon":   {2,5,7,9,11},
-        "mars":   {1,2,4,7,8,10,11},
-        "mercury":{1,2,4,5,6,9,10,11},
-        "jupiter":{1,2,4,5,6,9,10,11},
-        "venus":  {2,5,6,9,10,11},
-        "saturn": {3,5,6,12},
-        "lagna":  {1,2,4,5,6,7,9,10,11}
-    },
-
-    # --- VENUS ---
-    "venus": {
-        "sun":    {8,11,12},
-        "moon":   {1,2,3,4,5,8,9,11,12},
-        "mars":   {3,5,6,9,11,12},
-        "mercury":{3,5,6,9,11},
-        "jupiter":{5,8,9,10,11},
-        "venus":  {1,2,3,4,5,8,9,10,11},
-        "saturn": {3,4,5,8,9,10,11},
-        "lagna":  {1,2,3,4,5,8,9,11}
-    },
-
-    # --- SATURN ---
-    "saturn": {
-        "sun":    {1,2,4,7,8,10,11},
-        "moon":   {3,6,11},
-        "mars":   {3,5,6,10,11,12},
-        "mercury":{6,8,9,10,11,12},
-        "jupiter":{5,6,11,12},
-        "venus":  {6,11,12},
-        "saturn": {3,5,6,11},   # Saturn does NOT give in its own sign to 8 bindu ever.
-        "lagna":  {1,3,4,6,10,11}
-    },
-}
-
-# -------------------------------------------------------------------
-# Core calculation
-# -------------------------------------------------------------------
-
-def _planet_sign_index(kundli: dict, planet: str) -> int:
-    """Return 0..11 sign index of a planet from kundli['planets'][planet]['sign']."""
-    sign = kundli.get("planets", {}).get(planet, {}).get("sign")
-    return _sign_index(sign) if isinstance(sign, str) else None
-
-def _lagna_sign_index(kundli: dict) -> int:
-    sign = kundli.get("ascendant", {}).get("sign")
-    return _sign_index(sign) if isinstance(sign, str) else None
-
-def _empty_sign_dict() -> Dict[str, int]:
-    return {s: 0 for s in SIGNS}
-
-def calculate_bhinnashtakavarga(kundli: dict) -> Dict[str, Dict[str, int]]:
-    """
-    Compute BAV for each of the 7 planets (Sun..Saturn), returning a dict:
-      { planet: { "Aries": n, ..., "Pisces": n } }
-    Each n ranges 0..8.
-    """
-    # Gather contributor base positions (sign indexes)
-    positions = {
-        "sun":    _planet_sign_index(kundli, "sun"),
-        "moon":   _planet_sign_index(kundli, "moon"),
-        "mars":   _planet_sign_index(kundli, "mars"),
-        "mercury":_planet_sign_index(kundli, "mercury"),
-        "jupiter":_planet_sign_index(kundli, "jupiter"),
-        "venus":  _planet_sign_index(kundli, "venus"),
-        "saturn": _planet_sign_index(kundli, "saturn"),
-        "lagna":  _lagna_sign_index(kundli)
-    }
-
-    bav: Dict[str, Dict[str, int]] = {}
-    # For each planet, walk all 12 signs and sum bindus from contributors
-    for p, rules in BAV_RULES.items():
-        out = _empty_sign_dict()
-        for s_idx, sign_name in enumerate(SIGNS):
-            bindu = 0
-            for contrib, allowed_rel in rules.items():
-                c_idx = positions.get(contrib)
-                if c_idx is None:
-                    continue  # missing data, skip contributor
-                rel = _rel_house(c_idx, s_idx)
-                if rel in allowed_rel:
-                    bindu += 1
-            out[sign_name] = bindu
-        bav[p] = out
-    return bav
-
-def calculate_sarvashtakavarga(bav: Dict[str, Dict[str, int]]) -> Dict[str, int]:
-    """
-    Sum the seven planetary BAVs (Sun..Saturn) sign-wise.
-    Lagna is NOT included in the sum (Lagna only contributes within each planet’s BAV).
-    """
-    sav = _empty_sign_dict()
-    for sign in SIGNS:
-        sav[sign] = (
-            bav["sun"][sign] + bav["moon"][sign] + bav["mars"][sign] +
-            bav["mercury"][sign] + bav["jupiter"][sign] +
-            bav["venus"][sign] + bav["saturn"][sign]
-        )
-    return sav
-
-def calculate_ashtakavarga(kundli: dict) -> Dict[str, dict]:
-    """
-    Public entry used by your generator.
-    Returns:
-      {
-        "bhinnashtakavarga": {planet->{sign->bindu}},
-        "sarvashtakavarga": {sign->total}
-      }
-    """
-    bav = calculate_bhinnashtakavarga(kundli)
-    sav = calculate_sarvashtakavarga(bav)
-    return {
-        "bhinnashtakavarga": bav,
-        "sarvashtakavarga": sav
-    }
-
 ```
 
 ### rohini_engine.py
