@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-12 16:57:52Z UTC**
-- Commit: `02589147c8c1b9049b8889bc3bb3201b0e56671b`
+- Generated: **2025-08-13 12:00:53Z UTC**
+- Commit: `ac5b0a8f91235bc7c410ead21208ec12295b7252`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -27,35 +27,140 @@
 
 
 ```python
-from flask import Blueprint, jsonify, request
 from rohini_engine import generate_full_kundli
 from extensions import db
-from models import UserChart
+from models import UserChart, User
+from flask import Blueprint, jsonify, request, current_app
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from engine_adapter import call_generate_full_kundli
 
 api_bp = Blueprint('api', __name__)
 
+@api_bp.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({'ok': True})
+
+@api_bp.route('/user', methods=['POST'])
+def create_user():
+    payload = request.get_json()
+    if not payload or 'user_id' not in payload:
+        return jsonify({"code": "INVALID_REQUEST", "message": "Missing user_id in payload"}), 400
+    user_id = payload['user_id']
+    if User.query.get(user_id):
+        return jsonify({"code": "CONFLICT", "message": f"User with ID {user_id} already exists"}), 409
+    try:
+        new_user = User(id=user_id)
+        db.session.add(new_user)
+        db.session.commit()
+        return jsonify({"message": f"User {user_id} created successfully"}), 201
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error creating user: {e}", exc_info=True)
+        return jsonify({"code": "SERVER_ERROR", "message": "Could not create user"}), 500
+
 @api_bp.route('/kundli/generate', methods=['POST'])
 def generate_kundli():
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Invalid JSON payload"}), 400
+    original_payload = request.get_json()
+    if not original_payload:
+        return jsonify({"code": "INVALID_REQUEST", "message": "Invalid JSON payload"}), 400
+
+    user_id = original_payload.get('user_id')
+    if user_id is None:
+        return jsonify({"code": "INVALID_REQUEST", "message": "Missing user_id"}), 400
+
+    birth_datetime = None
+    tz_str = None
+    lat = None
+    lon = None
+
+    # Determine payload style and parse accordingly
+    if all(k in original_payload for k in ['birth_date', 'birth_time', 'tz']):
+        # Payload style A
+        try:
+            birth_date_str = original_payload['birth_date']
+            birth_time_str = original_payload['birth_time']
+            tz_str = original_payload['tz']
+            birth_datetime_naive = datetime.strptime(f"{birth_date_str} {birth_time_str}", '%Y-%m-%d %H:%M')
+            lat = original_payload['lat']
+            lon = original_payload['lon']
+        except KeyError as e:
+            return jsonify({"code": "INVALID_REQUEST", "message": f"Missing required field for style A: {e.args[0]}"}), 400
+        except ValueError:
+            return jsonify({"code": "INVALID_REQUEST", "message": "Invalid date/time format for style A"}), 400
+    elif all(k in original_payload for k in ['year', 'month', 'day', 'hour', 'minute', 'second', 'latitude', 'longitude', 'timezone_str']):
+        # Payload style B
+        try:
+            birth_datetime_naive = datetime(
+                original_payload['year'], original_payload['month'], original_payload['day'],
+                original_payload['hour'], original_payload['minute'], original_payload['second']
+            )
+            tz_str = original_payload['timezone_str']
+            lat = original_payload['latitude']
+            lon = original_payload['longitude']
+        except KeyError as e:
+            return jsonify({"code": "INVALID_REQUEST", "message": f"Missing required field for style B: {e.args[0]}"}), 400
+        except ValueError:
+            return jsonify({"code": "INVALID_REQUEST", "message": "Invalid date/time components for style B"}), 400
+    else:
+        return jsonify({"code": "INVALID_REQUEST", "message": "Unsupported payload style or missing required fields"}), 400
 
     try:
-        kundli_data = generate_full_kundli(data)
+        timezone = ZoneInfo(tz_str)
+        birth_datetime = birth_datetime_naive.replace(tzinfo=timezone)
+    except ZoneInfoNotFoundError:
+        return jsonify({"code": "INVALID_REQUEST", "message": f"Invalid timezone: {tz_str}"}), 400
+    except Exception as e:
+        return jsonify({"code": "SERVER_ERROR", "message": f"Error setting timezone: {str(e)}"}), 500
 
-        # Create a new UserChart instance and save to DB
+    if not all([birth_datetime, lat is not None, lon is not None, tz_str]):
+        return jsonify({"code": "INVALID_REQUEST", "message": "Missing or invalid normalized data"}), 400
+
+    try:
+        # Call the engine explicitly using the adapter
+        full_kundli_data = call_generate_full_kundli(birth_datetime, lat, lon, tz_str)
+
+        # Persist a UserChart row
         user_chart = UserChart(
-            user_id=data.get('user_id', 1),  # Placeholder user_id
-            birth_data=data,
-            chart_json=kundli_data
+            user_id=user_id,
+            birth_data=original_payload,  # Store the exact original JSON
+            chart_json=full_kundli_data,  # Store the full engine output
+            relation_type='self',
+            birth_datetime=birth_datetime,
+            tz=tz_str,
+            lat=lat,
+            lon=lon
         )
         db.session.add(user_chart)
         db.session.commit()
 
-        return jsonify(kundli_data)
+        return jsonify({"user_chart_id": user_chart.id, "chart_json": full_kundli_data}), 200
+
+    except ValueError as e:
+        db.session.rollback()
+        current_app.logger.error(f"ValueError in generate_kundli: {e}")
+        return jsonify({"code": "INVALID_REQUEST", "message": str(e)}), 400
     except Exception as e:
-        db.session.rollback() # Rollback in case of error
-        return jsonify({"error": str(e)}), 500
+        db.session.rollback()
+        current_app.logger.error(f"Exception in generate_kundli: {e}", exc_info=True)
+        return jsonify({"code": "SERVER_ERROR", "message": str(e)}), 500
+
+@api_bp.route('/user/chart/<int:user_id>', methods=['GET'])
+def get_latest_user_chart(user_id):
+    try:
+        user_chart = UserChart.query.filter_by(user_id=user_id).order_by(UserChart.created_at.desc()).first()
+        if user_chart:
+            return jsonify({
+                "user_id": user_chart.user_id,
+                "relation_type": user_chart.relation_type,
+                "birth_data": user_chart.birth_data,
+                "chart_json": user_chart.chart_json,
+                "created_at": user_chart.created_at.isoformat()
+            }), 200
+        else:
+            return jsonify({"code": "NOT_FOUND", "message": "no chart for user"}), 404
+    except Exception as e:
+        return jsonify({"code": "SERVER_ERROR", "message": str(e)}), 500
 ```
 
 ### models.py
@@ -67,6 +172,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime, timezone
 from extensions import db
 from werkzeug.security import generate_password_hash, check_password_hash
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    # Add other user-related fields as needed, e.g., email, username, etc.
+
+    def __repr__(self):
+        return f"<User {self.id}>"
 
 class SocialPost(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -113,14 +225,16 @@ import uuid
 
 class UserChart(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, nullable=False)
-    relation_type = db.Column(db.String(50), nullable=False, default='self') # New column for family charts
-    birth_data = db.Column(db.JSON, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False) # Foreign key to user table
+    relation_type = db.Column(db.Text, nullable=False, default='self')
+    birth_data = db.Column(JSONB, nullable=False)
     chart_json = db.Column(JSONB, nullable=False)
-    is_astrologer = db.Column(db.Boolean, default=False, nullable=False)
-    astrologer_id = db.Column(db.String(36), db.ForeignKey('astrologer_profile.id'), nullable=True) # FK to astrologer_profiles.id
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    birth_datetime = db.Column(db.TIMESTAMP(timezone=True), nullable=False)
+    tz = db.Column(db.Text, nullable=False)
+    lat = db.Column(db.Float, nullable=False)
+    lon = db.Column(db.Float, nullable=False)
+    created_at = db.Column(db.TIMESTAMP(timezone=True), server_default=db.func.now(), nullable=True)
+    updated_at = db.Column(db.TIMESTAMP(timezone=True), server_default=db.func.now(), onupdate=db.func.now(), nullable=True)
 
     __table_args__ = (db.UniqueConstraint('user_id', 'relation_type', name='_user_relation_uc'),)
 
