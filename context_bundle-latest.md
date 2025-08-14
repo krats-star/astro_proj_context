@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-14 00:51:19Z UTC**
-- Commit: `23b7d5aa82cd2af0b56cac50b51819f425c50638`
+- Generated: **2025-08-14 00:59:21Z UTC**
+- Commit: `aaa97bdadb3b3590bc02b349f527528d233df489`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -27,15 +27,27 @@
 
 
 ```python
-from rohini_engine import generate_full_kundli
+import logging
+import os
+
 from extensions import db
 from models import UserChart, User
 from flask import Blueprint, jsonify, request, current_app
-from datetime import datetime
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from engine_adapter import call_generate_full_kundli
 
+from api.schemas import parse_kundli_request, ValidationError
+from api.error_codes import ErrorCode
+
 api_bp = Blueprint('api', __name__)
+
+os.makedirs("logs", exist_ok=True)
+logger = logging.getLogger("T03e_flask")
+if not logger.handlers:
+    handler = logging.FileHandler("logs/T03e_flask.log")
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 @api_bp.route('/health', methods=['GET'])
 def health_check():
@@ -61,89 +73,46 @@ def create_user():
 
 @api_bp.route('/kundli/generate', methods=['POST'])
 def generate_kundli():
-    original_payload = request.get_json()
-    if not original_payload:
-        return jsonify({"code": "INVALID_REQUEST", "message": "Invalid JSON payload"}), 400
-
-    user_id = original_payload.get('user_id')
-    if user_id is None:
-        return jsonify({"code": "INVALID_REQUEST", "message": "Missing user_id"}), 400
-
-    birth_datetime = None
-    tz_str = None
-    lat = None
-    lon = None
-
-    # Determine payload style and parse accordingly
-    if all(k in original_payload for k in ['birth_date', 'birth_time', 'tz']):
-        # Payload style A
-        try:
-            birth_date_str = original_payload['birth_date']
-            birth_time_str = original_payload['birth_time']
-            tz_str = original_payload['tz']
-            birth_datetime_naive = datetime.strptime(f"{birth_date_str} {birth_time_str}", '%Y-%m-%d %H:%M')
-            lat = original_payload['lat']
-            lon = original_payload['lon']
-        except KeyError as e:
-            return jsonify({"code": "INVALID_REQUEST", "message": f"Missing required field for style A: {e.args[0]}"}), 400
-        except ValueError:
-            return jsonify({"code": "INVALID_REQUEST", "message": "Invalid date/time format for style A"}), 400
-    elif all(k in original_payload for k in ['year', 'month', 'day', 'hour', 'minute', 'second', 'latitude', 'longitude', 'timezone_str']):
-        # Payload style B
-        try:
-            birth_datetime_naive = datetime(
-                original_payload['year'], original_payload['month'], original_payload['day'],
-                original_payload['hour'], original_payload['minute'], original_payload['second']
-            )
-            tz_str = original_payload['timezone_str']
-            lat = original_payload['latitude']
-            lon = original_payload['longitude']
-        except KeyError as e:
-            return jsonify({"code": "INVALID_REQUEST", "message": f"Missing required field for style B: {e.args[0]}"}), 400
-        except ValueError:
-            return jsonify({"code": "INVALID_REQUEST", "message": "Invalid date/time components for style B"}), 400
-    else:
-        return jsonify({"code": "INVALID_REQUEST", "message": "Unsupported payload style or missing required fields"}), 400
-
     try:
-        timezone = ZoneInfo(tz_str)
-        birth_datetime = birth_datetime_naive.replace(tzinfo=timezone)
-    except ZoneInfoNotFoundError:
-        return jsonify({"code": "INVALID_REQUEST", "message": f"Invalid timezone: {tz_str}"}), 400
+        parsed = parse_kundli_request(request.get_json())
+    except ValidationError as ve:
+        logger.error(ve.message)
+        return jsonify({"code": ve.code.code, "message": ve.message}), ve.http_status
     except Exception as e:
-        return jsonify({"code": "SERVER_ERROR", "message": f"Error setting timezone: {str(e)}"}), 500
-
-    if not all([birth_datetime, lat is not None, lon is not None, tz_str]):
-        return jsonify({"code": "INVALID_REQUEST", "message": "Missing or invalid normalized data"}), 400
+        logger.exception("Unexpected error while parsing request")
+        return jsonify({"code": ErrorCode.SERVER_ERROR.code, "message": "Internal server error"}), ErrorCode.SERVER_ERROR.http_status
 
     try:
-        # Call the engine explicitly using the adapter
-        full_kundli_data = call_generate_full_kundli(birth_datetime, lat, lon, tz_str)
+        chart_json = call_generate_full_kundli(parsed.birth_datetime, parsed.lat, parsed.lon, parsed.tz)
 
-        # Persist a UserChart row
-        user_chart = UserChart(
-            user_id=user_id,
-            birth_data=original_payload,  # Store the exact original JSON
-            chart_json=full_kundli_data,  # Store the full engine output
-            relation_type='self',
-            birth_datetime=birth_datetime,
-            tz=tz_str,
-            lat=lat,
-            lon=lon
-        )
-        db.session.add(user_chart)
+        user_chart = UserChart.query.filter_by(user_id=parsed.user_id, relation_type='self').first()
+        if user_chart:
+            user_chart.birth_data = parsed.original_payload
+            user_chart.chart_json = chart_json
+            user_chart.birth_datetime = parsed.birth_datetime
+            user_chart.tz = parsed.tz
+            user_chart.lat = parsed.lat
+            user_chart.lon = parsed.lon
+        else:
+            user_chart = UserChart(
+                user_id=parsed.user_id,
+                relation_type='self',
+                birth_data=parsed.original_payload,
+                chart_json=chart_json,
+                birth_datetime=parsed.birth_datetime,
+                tz=parsed.tz,
+                lat=parsed.lat,
+                lon=parsed.lon,
+            )
+            db.session.add(user_chart)
         db.session.commit()
 
-        return jsonify({"user_chart_id": user_chart.id, "chart_json": full_kundli_data}), 200
-
-    except ValueError as e:
-        db.session.rollback()
-        current_app.logger.error(f"ValueError in generate_kundli: {e}")
-        return jsonify({"code": "INVALID_REQUEST", "message": str(e)}), 400
+        latest = UserChart.query.filter_by(user_id=parsed.user_id, relation_type='self').order_by(UserChart.updated_at.desc()).first()
+        return jsonify({"user_chart_id": latest.id, "chart_json": latest.chart_json}), 200
     except Exception as e:
         db.session.rollback()
-        current_app.logger.error(f"Exception in generate_kundli: {e}", exc_info=True)
-        return jsonify({"code": "SERVER_ERROR", "message": str(e)}), 500
+        logger.exception("Error generating kundli")
+        return jsonify({"code": ErrorCode.SERVER_ERROR.code, "message": "Internal server error"}), ErrorCode.SERVER_ERROR.http_status
 
 @api_bp.route('/user/chart/<int:user_id>', methods=['GET'])
 def get_latest_user_chart(user_id):
