@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-15 13:13:57Z UTC**
-- Commit: `f24a9ba5f1cce17be253911cb9f96b7ac0036e0b`
+- Generated: **2025-08-15 14:30:44Z UTC**
+- Commit: `3a0acca1965494e1c819e1da357d1e5efa3308c6`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -10,8 +10,8 @@
 
 1. [api_routes.py](#api_routespy)
 2. [models.py](#modelspy)
-3. [analysis_engine.py](#analysis_enginepy)
-4. [astrological_evaluator.py](#astrological_evaluatorpy)
+3. [/home/runner/work/astro_proj/astro_proj/engines/analysis_engine.py](#homerunnerworkastro_projastro_projenginesanalysis_enginepy)
+4. [/home/runner/work/astro_proj/astro_proj/engines/astrological_evaluator.py](#homerunnerworkastro_projastro_projenginesastrological_evaluatorpy)
 5. [/home/runner/work/astro_proj/astro_proj/engines/rohini_engine.py](#homerunnerworkastro_projastro_projenginesrohini_enginepy)
 6. [orchestration_engine.py](#orchestration_enginepy)
 7. [/home/runner/work/astro_proj/astro_proj/engines/astrological_constants.py](#homerunnerworkastro_projastro_projenginesastrological_constantspy)
@@ -403,7 +403,7 @@ class ChartCache(db.Model):
 
 ```
 
-### analysis_engine.py
+### /home/runner/work/astro_proj/astro_proj/engines/analysis_engine.py
 
 
 ```python
@@ -411,10 +411,10 @@ class ChartCache(db.Model):
 
 import math
 from datetime import datetime
-import astrological_constants as ac
-import astrological_evaluator as evaluator
+from engines import astrological_constants as ac
+from engines import astrological_evaluator as evaluator
 import db_utils  # Still needed if you fetch yoga rules from KB
-import rohini_engine  # For transit positions if needed
+from engines import rohini_engine  # For transit positions if needed
 
 # -------------------------------------------------------------------
 # Utils
@@ -1035,13 +1035,13 @@ def run_all_analysis(user_chart, transit_positions, ashtakavarga_scores, related
     return findings
 ```
 
-### astrological_evaluator.py
+### /home/runner/work/astro_proj/astro_proj/engines/astrological_evaluator.py
 
 
 ```python
 # astrological_evaluator.py
 
-import astrological_constants as ac
+from engines import astrological_constants as ac
 
 def get_house_lord(user_chart, house_number):
     """Calculates the lord of a given house based on the ascendant sign."""
@@ -2862,10 +2862,10 @@ Columns:
 ### Planetary Positions & Shadbala
 | Planet | Longitude | Rasi D1 | D9 Sign | Nakshatra (Pada) | House | Dignity | Status | Ishta | Kashta | Total Shadbala |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **Sun** | 51° 31' 48" / 21° 31' 48" taurus | Taurus | **Cancer** | Rohini (4) | 6 | Enemy Sign | Normal | 0.0 | 4.71 | **1.06** |
-| **Moon** | 330° 42' 51" / 0° 42' 51" pisces | Pisces | **Cancer** | Purva Bhadrapada (4) | 4 | Neutral Sign | Normal | 0.0 | 4.55 | **1.98** |
+| **Sun** | 51° 31' 47" / 21° 31' 47" taurus | Taurus | **Cancer** | Rohini (4) | 6 | Enemy Sign | Normal | 0.0 | 4.71 | **1.06** |
+| **Moon** | 330° 42' 52" / 0° 42' 52" pisces | Pisces | **Cancer** | Purva Bhadrapada (4) | 4 | Neutral Sign | Normal | 0.0 | 4.55 | **1.98** |
 | **Mars** | 81° 52' 56" / 21° 52' 56" gemini | Gemini | **Aries** | Punarvasu (1) | 7 | Enemy Sign | Normal | 0.0 | 4.71 | **0.76** |
-| **Mercury** | 52° 25' 12" / 22° 25' 12" taurus | Taurus | **Cancer** | Rohini (4) | 6 | Friendly Sign | Combust (0.89°) | 0.0 | 4.21 | **0.8** |
+| **Mercury** | 52° 25' 11" / 22° 25' 11" taurus | Taurus | **Cancer** | Rohini (4) | 6 | Friendly Sign | Combust (0.89°) | 0.0 | 4.21 | **0.8** |
 | **Jupiter** | 252° 19' 34" / 12° 19' 34" sagittarius | Sagittarius | **Cancer** | Moola (4) | 1 | Moolatrikona | Retrograde | 4.21 | 0.0 | **3.15** |
 | **Venus** | 69° 28' 48" / 9° 28' 48" gemini | Gemini | **Sagittarius** | Ardra (1) | 7 | Friendly Sign | Retrograde | 2.43 | 0.0 | **1.5** |
 | **Saturn** | 47° 9' 51" / 17° 9' 51" taurus | Taurus | **Gemini** | Rohini (3) | 6 | Friendly Sign | Combust (4.37°) | 0.0 | 4.21 | **0.35** |
@@ -3126,8 +3126,8 @@ No Debilitated Planets
 |---|---|---|---|
 | Moon | 1974-08-27 | 1974-09-04 | 8 |
 | Mars | 1974-09-04 | 1974-09-09 | 6 |
-| Rahu | 1974-09-09 | 1974-09-24 | 14 |
-| Jupiter | 1974-09-24 | 1974-10-06 | 13 |
+| Rahu | 1974-09-09 | 1974-09-23 | 14 |
+| Jupiter | 1974-09-23 | 1974-10-06 | 13 |
 | Saturn | 1974-10-06 | 1974-10-21 | 15 |
 | Mercury | 1974-10-21 | 1974-11-04 | 14 |
 | Ketu | 1974-11-04 | 1974-11-10 | 6 |
@@ -3216,8 +3216,8 @@ No Debilitated Planets
 | Moon | 1985-08-04 | 1985-09-02 | 29 |
 | Mars | 1985-09-02 | 1985-09-22 | 20 |
 | Rahu | 1985-09-22 | 1985-11-13 | 52 |
-| Jupiter | 1985-11-13 | 1985-12-30 | 46 |
-| Saturn | 1985-12-30 | 1986-02-22 | 55 |
+| Jupiter | 1985-11-13 | 1985-12-29 | 46 |
+| Saturn | 1985-12-29 | 1986-02-22 | 55 |
 | Mercury | 1986-02-22 | 1986-04-13 | 49 |
 | Ketu | 1986-04-13 | 1986-05-03 | 20 |
 | Venus | 1986-05-03 | 1986-06-30 | 58 |
@@ -3279,8 +3279,8 @@ No Debilitated Planets
 | Mercury | 1994-07-27 | 1994-11-29 | 125 |
 | Ketu | 1994-11-29 | 1995-01-19 | 51 |
 | Venus | 1995-01-19 | 1995-06-15 | 147 |
-| Sun | 1995-06-15 | 1995-07-29 | 44 |
-| Moon | 1995-07-29 | 1995-10-10 | 73 |
+| Sun | 1995-06-15 | 1995-07-28 | 44 |
+| Moon | 1995-07-28 | 1995-10-10 | 73 |
 | Mars | 1995-10-10 | 1995-11-30 | 51 |
 | Rahu | 1995-11-30 | 1996-04-10 | 132 |
 | Jupiter | 1996-04-10 | 1996-08-05 | 117 |
@@ -3295,8 +3295,8 @@ No Debilitated Planets
 | Mars | 1997-05-01 | 1997-05-23 | 21 |
 | Rahu | 1997-05-23 | 1997-07-16 | 54 |
 | Jupiter | 1997-07-16 | 1997-09-02 | 48 |
-| Saturn | 1997-09-02 | 1997-10-30 | 57 |
-| Mercury | 1997-10-30 | 1997-12-20 | 51 |
+| Saturn | 1997-09-02 | 1997-10-29 | 57 |
+| Mercury | 1997-10-29 | 1997-12-20 | 51 |
 | **Venus** | 1997-12-20 | 2000-10-20 | 1035 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
@@ -3360,8 +3360,8 @@ No Debilitated Planets
 | **Jupiter** | 2006-08-11 | 2008-11-16 | 828 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
-| Jupiter | 2006-08-11 | 2006-11-30 | 110 |
-| Saturn | 2006-11-30 | 2007-04-10 | 131 |
+| Jupiter | 2006-08-11 | 2006-11-29 | 110 |
+| Saturn | 2006-11-29 | 2007-04-10 | 131 |
 | Mercury | 2007-04-10 | 2007-08-05 | 117 |
 | Ketu | 2007-08-05 | 2007-09-22 | 48 |
 | Venus | 2007-09-22 | 2008-02-07 | 138 |
@@ -3394,8 +3394,8 @@ No Debilitated Planets
 | Moon | 2011-09-06 | 2011-09-19 | 12 |
 | Mars | 2011-09-19 | 2011-09-27 | 9 |
 | Rahu | 2011-09-27 | 2011-10-20 | 22 |
-| Jupiter | 2011-10-20 | 2011-11-09 | 20 |
-| Saturn | 2011-11-09 | 2011-12-02 | 24 |
+| Jupiter | 2011-10-20 | 2011-11-08 | 20 |
+| Saturn | 2011-11-08 | 2011-12-02 | 24 |
 | Mercury | 2011-12-02 | 2011-12-23 | 21 |
 | **Venus** | 2011-12-23 | 2013-02-21 | 426 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
@@ -3428,8 +3428,8 @@ No Debilitated Planets
 | Mars | 2013-07-17 | 2013-07-29 | 12 |
 | Rahu | 2013-07-29 | 2013-08-30 | 32 |
 | Jupiter | 2013-08-30 | 2013-09-28 | 28 |
-| Saturn | 2013-09-28 | 2013-11-01 | 34 |
-| Mercury | 2013-11-01 | 2013-12-01 | 30 |
+| Saturn | 2013-09-28 | 2013-10-31 | 34 |
+| Mercury | 2013-10-31 | 2013-12-01 | 30 |
 | Ketu | 2013-12-01 | 2013-12-13 | 12 |
 | Venus | 2013-12-13 | 2014-01-18 | 36 |
 | Sun | 2014-01-18 | 2014-01-28 | 11 |
@@ -3452,8 +3452,8 @@ No Debilitated Planets
 | Jupiter | 2014-08-23 | 2014-10-13 | 51 |
 | Saturn | 2014-10-13 | 2014-12-13 | 61 |
 | Mercury | 2014-12-13 | 2015-02-05 | 54 |
-| Ketu | 2015-02-05 | 2015-02-28 | 22 |
-| Venus | 2015-02-28 | 2015-05-02 | 64 |
+| Ketu | 2015-02-05 | 2015-02-27 | 22 |
+| Venus | 2015-02-27 | 2015-05-02 | 64 |
 | Sun | 2015-05-02 | 2015-05-22 | 19 |
 | Moon | 2015-05-22 | 2015-06-23 | 32 |
 | Mars | 2015-06-23 | 2015-07-15 | 22 |
@@ -3552,8 +3552,8 @@ No Debilitated Planets
 | Jupiter | 2026-03-09 | 2026-08-02 | 146 |
 | Saturn | 2026-08-02 | 2027-01-22 | 173 |
 | Mercury | 2027-01-22 | 2027-06-27 | 155 |
-| Ketu | 2027-06-27 | 2027-08-30 | 64 |
-| Venus | 2027-08-30 | 2028-02-28 | 183 |
+| Ketu | 2027-06-27 | 2027-08-29 | 64 |
+| Venus | 2027-08-29 | 2028-02-28 | 183 |
 | Sun | 2028-02-28 | 2028-04-23 | 55 |
 | Moon | 2028-04-23 | 2028-07-23 | 91 |
 | Mars | 2028-07-23 | 2028-09-25 | 64 |
@@ -3579,8 +3579,8 @@ No Debilitated Planets
 | Sun | 2033-01-23 | 2033-03-22 | 58 |
 | Moon | 2033-03-22 | 2033-06-27 | 96 |
 | Mars | 2033-06-27 | 2033-09-02 | 67 |
-| Rahu | 2033-09-02 | 2034-02-23 | 173 |
-| Jupiter | 2034-02-23 | 2034-07-27 | 154 |
+| Rahu | 2033-09-02 | 2034-02-22 | 173 |
+| Jupiter | 2034-02-22 | 2034-07-27 | 154 |
 | **Mercury** | 2034-07-27 | 2037-05-27 | 1035 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
@@ -3589,8 +3589,8 @@ No Debilitated Planets
 | Venus | 2035-02-19 | 2035-08-10 | 172 |
 | Sun | 2035-08-10 | 2035-10-01 | 52 |
 | Moon | 2035-10-01 | 2035-12-26 | 86 |
-| Mars | 2035-12-26 | 2036-02-25 | 60 |
-| Rahu | 2036-02-25 | 2036-07-29 | 155 |
+| Mars | 2035-12-26 | 2036-02-24 | 60 |
+| Rahu | 2036-02-24 | 2036-07-29 | 155 |
 | Jupiter | 2036-07-29 | 2036-12-14 | 138 |
 | Saturn | 2036-12-14 | 2037-05-27 | 164 |
 | **Ketu** | 2037-05-27 | 2038-07-27 | 426 |
@@ -3626,8 +3626,8 @@ No Debilitated Planets
 |---|---|---|---|
 | Moon | 2038-11-13 | 2038-11-28 | 15 |
 | Mars | 2038-11-28 | 2038-12-09 | 11 |
-| Rahu | 2038-12-09 | 2039-01-06 | 27 |
-| Jupiter | 2039-01-06 | 2039-01-30 | 24 |
+| Rahu | 2038-12-09 | 2039-01-05 | 27 |
+| Jupiter | 2039-01-05 | 2039-01-30 | 24 |
 | Saturn | 2039-01-30 | 2039-02-28 | 29 |
 | Mercury | 2039-02-28 | 2039-03-26 | 26 |
 | Ketu | 2039-03-26 | 2039-04-05 | 11 |
@@ -3637,8 +3637,8 @@ No Debilitated Planets
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
 | Mars | 2039-05-15 | 2039-05-22 | 7 |
-| Rahu | 2039-05-22 | 2039-06-11 | 19 |
-| Jupiter | 2039-06-11 | 2039-06-28 | 17 |
+| Rahu | 2039-05-22 | 2039-06-10 | 19 |
+| Jupiter | 2039-06-10 | 2039-06-28 | 17 |
 | Saturn | 2039-06-28 | 2039-07-18 | 20 |
 | Mercury | 2039-07-18 | 2039-08-05 | 18 |
 | Ketu | 2039-08-05 | 2039-08-12 | 7 |
@@ -3690,19 +3690,19 @@ No Debilitated Planets
 | Sun | 2042-09-05 | 2042-09-21 | 16 |
 | Moon | 2042-09-21 | 2042-10-17 | 26 |
 | Mars | 2042-10-17 | 2042-11-04 | 18 |
-| Rahu | 2042-11-04 | 2042-12-21 | 47 |
-| Jupiter | 2042-12-21 | 2043-01-31 | 41 |
+| Rahu | 2042-11-04 | 2042-12-20 | 47 |
+| Jupiter | 2042-12-20 | 2043-01-31 | 41 |
 | Saturn | 2043-01-31 | 2043-03-21 | 49 |
 | **Ketu** | 2043-03-21 | 2043-07-27 | 128 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
-| Ketu | 2043-03-21 | 2043-03-29 | 7 |
-| Venus | 2043-03-29 | 2043-04-19 | 21 |
+| Ketu | 2043-03-21 | 2043-03-28 | 7 |
+| Venus | 2043-03-28 | 2043-04-19 | 21 |
 | Sun | 2043-04-19 | 2043-04-25 | 6 |
 | Moon | 2043-04-25 | 2043-05-06 | 11 |
 | Mars | 2043-05-06 | 2043-05-13 | 7 |
-| Rahu | 2043-05-13 | 2043-06-02 | 19 |
-| Jupiter | 2043-06-02 | 2043-06-19 | 17 |
+| Rahu | 2043-05-13 | 2043-06-01 | 19 |
+| Jupiter | 2043-06-01 | 2043-06-19 | 17 |
 | Saturn | 2043-06-19 | 2043-07-09 | 20 |
 | Mercury | 2043-07-09 | 2043-07-27 | 18 |
 | **Venus** | 2043-07-27 | 2044-07-26 | 365 |
@@ -3721,22 +3721,22 @@ No Debilitated Planets
 #### Mahadasha: Moon (2044-07-26 - 2054-07-27)
 | Antardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
-| **Moon** | 2044-07-26 | 2045-05-27 | 304 |
+| **Moon** | 2044-07-26 | 2045-05-26 | 304 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
-| Moon | 2044-07-26 | 2044-08-21 | 25 |
-| Mars | 2044-08-21 | 2044-09-07 | 18 |
+| Moon | 2044-07-26 | 2044-08-20 | 25 |
+| Mars | 2044-08-20 | 2044-09-07 | 18 |
 | Rahu | 2044-09-07 | 2044-10-23 | 46 |
 | Jupiter | 2044-10-23 | 2044-12-02 | 41 |
 | Saturn | 2044-12-02 | 2045-01-20 | 48 |
 | Mercury | 2045-01-20 | 2045-03-04 | 43 |
 | Ketu | 2045-03-04 | 2045-03-22 | 18 |
 | Venus | 2045-03-22 | 2045-05-11 | 51 |
-| Sun | 2045-05-11 | 2045-05-27 | 15 |
-| **Mars** | 2045-05-27 | 2045-12-26 | 213 |
+| Sun | 2045-05-11 | 2045-05-26 | 15 |
+| **Mars** | 2045-05-26 | 2045-12-26 | 213 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
-| Mars | 2045-05-27 | 2045-06-08 | 12 |
+| Mars | 2045-05-26 | 2045-06-08 | 12 |
 | Rahu | 2045-06-08 | 2045-07-10 | 32 |
 | Jupiter | 2045-07-10 | 2045-08-07 | 28 |
 | Saturn | 2045-08-07 | 2045-09-10 | 34 |
@@ -3838,8 +3838,8 @@ No Debilitated Planets
 |---|---|---|---|
 | Mars | 2054-07-27 | 2054-08-04 | 9 |
 | Rahu | 2054-08-04 | 2054-08-27 | 22 |
-| Jupiter | 2054-08-27 | 2054-09-16 | 20 |
-| Saturn | 2054-09-16 | 2054-10-09 | 24 |
+| Jupiter | 2054-08-27 | 2054-09-15 | 20 |
+| Saturn | 2054-09-15 | 2054-10-09 | 24 |
 | Mercury | 2054-10-09 | 2054-10-30 | 21 |
 | Ketu | 2054-10-30 | 2054-11-08 | 9 |
 | Venus | 2054-11-08 | 2054-12-03 | 25 |
@@ -3902,8 +3902,8 @@ No Debilitated Planets
 | Moon | 2059-03-04 | 2059-03-17 | 12 |
 | Mars | 2059-03-17 | 2059-03-25 | 9 |
 | Rahu | 2059-03-25 | 2059-04-17 | 22 |
-| Jupiter | 2059-04-17 | 2059-05-07 | 20 |
-| Saturn | 2059-05-07 | 2059-05-30 | 24 |
+| Jupiter | 2059-04-17 | 2059-05-06 | 20 |
+| Saturn | 2059-05-06 | 2059-05-30 | 24 |
 | Mercury | 2059-05-30 | 2059-06-20 | 21 |
 | **Venus** | 2059-06-20 | 2060-08-19 | 426 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
@@ -3915,8 +3915,8 @@ No Debilitated Planets
 | Rahu | 2059-11-20 | 2060-01-23 | 64 |
 | Jupiter | 2060-01-23 | 2060-03-20 | 57 |
 | Saturn | 2060-03-20 | 2060-05-26 | 67 |
-| Mercury | 2060-05-26 | 2060-07-26 | 60 |
-| Ketu | 2060-07-26 | 2060-08-19 | 25 |
+| Mercury | 2060-05-26 | 2060-07-25 | 60 |
+| Ketu | 2060-07-25 | 2060-08-19 | 25 |
 | **Sun** | 2060-08-19 | 2060-12-25 | 128 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
@@ -3951,8 +3951,8 @@ No Debilitated Planets
 | Rahu | 2061-07-26 | 2061-12-21 | 148 |
 | Jupiter | 2061-12-21 | 2062-05-02 | 131 |
 | Saturn | 2062-05-02 | 2062-10-05 | 156 |
-| Mercury | 2062-10-05 | 2063-02-22 | 140 |
-| Ketu | 2063-02-22 | 2063-04-20 | 58 |
+| Mercury | 2062-10-05 | 2063-02-21 | 140 |
+| Ketu | 2063-02-21 | 2063-04-20 | 58 |
 | Venus | 2063-04-20 | 2063-10-01 | 164 |
 | Sun | 2063-10-01 | 2063-11-20 | 49 |
 | Moon | 2063-11-20 | 2064-02-10 | 82 |
@@ -3964,11 +3964,11 @@ No Debilitated Planets
 | Saturn | 2064-08-02 | 2064-12-19 | 139 |
 | Mercury | 2064-12-19 | 2065-04-22 | 124 |
 | Ketu | 2065-04-22 | 2065-06-12 | 51 |
-| Venus | 2065-06-12 | 2065-11-06 | 146 |
-| Sun | 2065-11-06 | 2065-12-19 | 44 |
+| Venus | 2065-06-12 | 2065-11-05 | 146 |
+| Sun | 2065-11-05 | 2065-12-19 | 44 |
 | Moon | 2065-12-19 | 2066-03-02 | 73 |
-| Mars | 2066-03-02 | 2066-04-23 | 51 |
-| Rahu | 2066-04-23 | 2066-09-01 | 131 |
+| Mars | 2066-03-02 | 2066-04-22 | 51 |
+| Rahu | 2066-04-22 | 2066-09-01 | 131 |
 | **Saturn** | 2066-09-01 | 2069-07-08 | 1041 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
@@ -4010,8 +4010,8 @@ No Debilitated Planets
 |---|---|---|---|
 | Venus | 2073-02-12 | 2073-08-13 | 183 |
 | Sun | 2073-08-13 | 2073-10-07 | 55 |
-| Moon | 2073-10-07 | 2074-01-07 | 91 |
-| Mars | 2074-01-07 | 2074-03-11 | 64 |
+| Moon | 2073-10-07 | 2074-01-06 | 91 |
+| Mars | 2074-01-06 | 2074-03-11 | 64 |
 | Rahu | 2074-03-11 | 2074-08-23 | 164 |
 | Jupiter | 2074-08-23 | 2075-01-16 | 146 |
 | Saturn | 2075-01-16 | 2075-07-08 | 173 |
