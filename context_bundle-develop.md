@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-15 14:30:44Z UTC**
-- Commit: `3a0acca1965494e1c819e1da357d1e5efa3308c6`
+- Generated: **2025-08-15 16:50:26Z UTC**
+- Commit: `65c0f05396872ca93a03c52cd744c6f01c8c95cf`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -1003,6 +1003,18 @@ def analyze_dasha_gochar_synthesis(natal_chart, transit_positions):
                     return findings
     return [{"type": "dasha", "name": "Current Dasha Period", "key": "dasha_period_not_found", "finding": "Current Dasha period not found.", "pre_written_insight_keys": []}]
 
+
+def analyze_patterns(kundli):
+    # TODO: Fill in logic for meaningful pattern analysis
+    return {
+        "kemadruma": False,
+        "neecha_bhanga": [],
+        "rasi_aspects": {},
+        "bhavesha_strength": {}
+    }
+
+
+
 # -------------------------------------------------------------------
 # Master Orchestrator
 # -------------------------------------------------------------------
@@ -1268,6 +1280,9 @@ import os
 import swisseph as swe
 import math
 from engines import astrological_constants as ac
+from .ashtakavarga_engine import calculate_ashtakavarga
+
+
 
 # --- Init Swiss Ephemeris ---
 swe.set_ephe_path(os.path.join(os.path.dirname(__file__), 'sweph_data'))
@@ -1319,6 +1334,19 @@ def get_navamsa_sign(longitude):
     ni = ac.NAKSHATRAS.index(nak)
     total = ni * 4 + (pada - 1)
     return SIGNS[total % 12]
+
+def get_dashamsa_sign(longitude):
+    """
+    Dashamsa (D10) sign is calculated by dividing each sign into 10 equal parts of 3° each.
+    Starting sign differs based on whether the sign is odd/even.
+    """
+    lon = _norm_lon(longitude)
+    si = int(lon // 30)  # sign index (0–11)
+    deg_within_sign = lon % 30
+    pada = int(deg_within_sign // 3)
+    start_idx = si if si % 2 == 0 else (si + 8) % 12
+    return SIGNS[(start_idx + pada) % 12]
+
 
 def get_planet_dignity(planet_name, sign):
     # CHANGE: expect lowercase planet_name, lower-case keys in constants
@@ -1703,6 +1731,7 @@ def generate_full_kundli(birth_data):
         if combust:
             tags.append(f"combust ({dist}°)")
         d9 = get_navamsa_sign(data['longitude'])
+        d10 = get_dashamsa_sign(data['longitude'])
         if d9 == sign:
             tags.append("vargottama")
         if name in war_status:
@@ -1716,6 +1745,7 @@ def generate_full_kundli(birth_data):
             "formatted_sign": _format_sign(data['longitude']),
             "sign": sign,
             "d9_sign": d9,
+            "d10_sign": d10,
             "nakshatra": nak,
             "pada": pada,
             "dignity": get_planet_dignity(name, sign),
@@ -1726,12 +1756,24 @@ def generate_full_kundli(birth_data):
     for n in list(kundli["planets"].keys()):
         kundli["planets"][n]["shadbala"] = calculate_shadbala(n, kundli)
 
+
+    # CHANGE: Panchang at birth (use LOCAL datetime) + Chandra Lagna chart
+    # Panchang + Chandra Lagna chart (birth-time elements)
+    kundli["panchang"] = compute_panchang(kundli, local_dt)
+    kundli["chandra_lagna_chart"] = compute_chandra_lagna_chart(kundli)
+
+    # D9 and D10 varga
+    kundli["vargas"] = {
+        "D9": {k: v.get("d9_sign") for k, v in kundli["planets"].items()},
+        "D10": {k: v.get("d10_sign") for k, v in kundli["planets"].items()}
+    }
+
+    kundli["ashtakavarga_scores"] = calculate_ashtakavarga(kundli)
+
+
     # vimshottari
     kundli["vimshottari_dasha"] = calculate_vimshottari_dasha(kundli["planets"]["moon"]["longitude"], utc_dt.date())
 
-    # CHANGE: Panchang at birth (use LOCAL datetime) + Chandra Lagna chart
-    kundli["panchang"] = compute_panchang(kundli, local_dt)
-    kundli["chandra_lagna_chart"] = compute_chandra_lagna_chart(kundli)
 
     return kundli
 
@@ -2891,6 +2933,30 @@ Columns:
 | 12 | aquarius | — |
 
 ---
+
+## Divisional Charts (Vargas)
+
+### D9 Chart
+- **Sun** → *Cancer*
+- **Moon** → *Cancer*
+- **Mars** → *Aries*
+- **Mercury** → *Cancer*
+- **Jupiter** → *Cancer*
+- **Venus** → *Sagittarius*
+- **Saturn** → *Gemini*
+- **Rahu** → *Aquarius*
+- **Ketu** → *Leo*
+
+### D10 Chart
+- **Sun** → *Leo*
+- **Moon** → *Scorpio*
+- **Mars** → *Capricorn*
+- **Mercury** → *Leo*
+- **Jupiter** → *Aries*
+- **Venus** → *Virgo*
+- **Saturn** → *Gemini*
+- **Rahu** → *Libra*
+- **Ketu** → *Aries*
 
 ## Advanced Planetary States (Avasthas)
 | Planet | Baladi Avastha (Age) | Deeptaadi Avastha (Disposition) | Lajjitaadi Avastha (Mood) |
