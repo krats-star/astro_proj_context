@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-15 09:39:29Z UTC**
-- Commit: `c018156f308e6fdc12cb24c0a55b15ebd68cc14d`
+- Generated: **2025-08-15 12:34:55Z UTC**
+- Commit: `647a8e1a5ff438938b71bc30b3ae6b76d8fb01ce`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -27,276 +27,183 @@
 
 
 ```python
-# api_routes.py
-import logging
-import os
-from datetime import date as dt_date
-from zoneinfo import ZoneInfo
-
-from flask import Blueprint, jsonify, request, current_app
-from werkzeug.exceptions import BadRequest
-
-from extensions import db
-from models import UserChart, User
-
-from engine_adapter import call_generate_full_kundli
-
-# API-layer imports
-from api import get_panchanga
+from flask import Blueprint, request, jsonify
+from models import UserChart, db, PanchangaCache, ChartCache
+from datetime import datetime
+from engines.panchang_engine import get_panchanga
+from engines.rohini_engine import generate_full_kundli
 from api.schemas import parse_kundli_request, ValidationError, PanchangaQuery
-from api.error_codes import ErrorCode
-
-# NEW: make sure we can catch pydantic's own validation errors
-from pydantic import ValidationError as PydanticValidationError
-
+from sqlalchemy.exc import SQLAlchemyError
+from werkzeug.exceptions import HTTPException
+import logging
 
 api_bp = Blueprint("api", __name__)
 
-# -------- optional file logger (kept from your version) ----------
-os.makedirs("logs", exist_ok=True)
-logger = logging.getLogger("T03e_flask")
-if not logger.handlers:
-    handler = logging.FileHandler("logs/T03e_flask.log")
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-# -----------------------------------------------------------------
-
-
-def _parse_date(s: str) -> dt_date:
-    try:
-        return dt_date.fromisoformat(s)
-    except Exception:
-        raise BadRequest("Invalid 'date'. Use YYYY-MM-DD.")
-
-
-def _parse_tz(s: str) -> str:
-    try:
-        ZoneInfo(s)
-        return s
-    except Exception:
-        raise BadRequest("Invalid 'tz'. Use a valid IANA zone (e.g., Asia/Kolkata).")
-
-
-def _parse_float(name: str, s: str, lo: float, hi: float) -> float:
-    try:
-        v = float(s)
-    except Exception:
-        raise BadRequest(f"Invalid '{name}'. Must be a number.")
-    if not (lo <= v <= hi):
-        raise BadRequest(f"'{name}' out of range. Expected {lo}..{hi}.")
-    return v
-
-
-def _format_pydantic_error(e: PydanticValidationError) -> str:
-    """
-    Collapse pydantic's error list into a single user-facing sentence.
-    We keep it simple: return the first error message.
-    """
-    try:
-        err = e.errors()[0]
-        # Prefer custom message if present, else build something readable
-        msg = err.get("msg") or "Invalid request parameters"
-        loc = err.get("loc")
-        if loc:
-            # loc may be ('field', ...) or ('__root__',)
-            field = ".".join(str(x) for x in loc if x != "__root__")
-            if field:
-                return f"{field}: {msg}"
-        return msg
-    except Exception:
-        return "Invalid request parameters"
-
-
-@api_bp.route("/health", methods=["GET"])
-def health_check():
-    return jsonify({"ok": True})
-
-
-@api_bp.route("/user", methods=["POST"])
-def create_user():
-    payload = request.get_json()
-    if not payload or "user_id" not in payload:
-        return (
-            jsonify({"code": "INVALID_REQUEST", "message": "Missing user_id in payload"}),
-            400,
-        )
-
-    user_id = payload["user_id"]
-    if User.query.get(user_id):
-        return (
-            jsonify(
-                {"code": "CONFLICT", "message": f"User with ID {user_id} already exists"}
-            ),
-            409,
-        )
-
-    try:
-        new_user = User(id=user_id)
-        db.session.add(new_user)
-        db.session.commit()
-        return jsonify({"message": f"User {user_id} created successfully"}), 201
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Error creating user: {e}", exc_info=True)
-        return (
-            jsonify({"code": "SERVER_ERROR", "message": "Could not create user"}),
-            500,
-        )
-
-
-@api_bp.route("/kundli/generate", methods=["POST"])
+@api_bp.route("/api/kundli/generate", methods=["POST"])
 def generate_kundli():
     try:
-        parsed = parse_kundli_request(request.get_json())
-    except ValidationError as ve:
-        logger.error(ve.message)
-        return jsonify({"code": ve.code.code, "message": ve.message}), ve.http_status
-    except Exception:
-        logger.exception("Unexpected error while parsing request")
-        return jsonify({"code": ErrorCode.SERVER_ERROR.code, "message": "Internal server error"}), 500
+        data = parse_kundli_request(request.get_json())
 
-    try:
-        from models import ChartCache
-
-        # Try cache lookup first
         existing = ChartCache.query.filter_by(
-            birth_datetime=parsed.birth_datetime,
-            tz=parsed.tz,
-            lat=parsed.lat,
-            lon=parsed.lon
+            birth_datetime=data["birth_datetime"],
+            tz=data["tz"],
+            lat=data["lat"],
+            lon=data["lon"]
         ).first()
 
         if existing:
-            chart_json = existing.chart_json
-            from_cache = True
-        else:
-            # Generate chart and cache it
-            chart_json = call_generate_full_kundli(parsed.birth_datetime, parsed.lat, parsed.lon, parsed.tz)
-            new_entry = ChartCache(
-                birth_datetime=parsed.birth_datetime,
-                tz=parsed.tz,
-                lat=parsed.lat,
-                lon=parsed.lon,
-                chart_json=chart_json
-            )
-            db.session.add(new_entry)
-            from_cache = False
+            return jsonify({"ok": True, "from_cache": True, "chart": existing.chart_json})
 
-        # Save or update in UserChart
-        user_chart = UserChart.query.filter_by(user_id=parsed.user_id, relation_type="self").first()
-        if user_chart:
-            user_chart.birth_data = parsed.original_payload
-            user_chart.chart_json = chart_json
-            user_chart.birth_datetime = parsed.birth_datetime
-            user_chart.tz = parsed.tz
-            user_chart.lat = parsed.lat
-            user_chart.lon = parsed.lon
-        else:
-            user_chart = UserChart(
-                user_id=parsed.user_id,
-                relation_type="self",
-                birth_data=parsed.original_payload,
-                chart_json=chart_json,
-                birth_datetime=parsed.birth_datetime,
-                tz=parsed.tz,
-                lat=parsed.lat,
-                lon=parsed.lon
-            )
-            db.session.add(user_chart)
+        chart_data = generate_full_kundli({
+            'timezone_str': timezone,
+            'year': dt.year,
+            'month': dt.month,
+            'day': dt.day,
+            'hour': dt.hour,
+            'minute': dt.minute,
+            'second': dt.second,
+            'latitude': lat,
+            'longitude': lon
+        })
 
+        cache = ChartCache(
+            birth_datetime=data["birth_datetime"],
+            tz=data["tz"],
+            lat=data["lat"],
+            lon=data["lon"],
+            chart_json=chart_data
+        )
+        db.session.add(cache)
         db.session.commit()
 
-        latest = (
-            UserChart.query.filter_by(user_id=parsed.user_id, relation_type="self")
-            .order_by(UserChart.updated_at.desc())
-            .first()
-        )
+        return jsonify({"ok": True, "from_cache": False, "chart": chart_data})
+
+    except ValidationError as ve:
         return jsonify({
-            "user_chart_id": latest.id,
-            "chart_json": {**latest.chart_json, "debug": {"from_cache": from_cache}},
-        }), 200
+            "ok": False,
+            "error": {
+                "type": "validation_error",
+                "message": str(ve)
+            }
+        }), 400
 
-    except Exception:
+    except SQLAlchemyError as se:
         db.session.rollback()
-        logger.exception("Error generating kundli")
-        return jsonify({"code": ErrorCode.SERVER_ERROR.code, "message": "Internal server error"}), 500
+        logging.exception("Database error while generating kundli")
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "database_error",
+                "message": str(se)
+            }
+        }), 500
 
-
-@api_bp.route("/user/chart/<int:user_id>", methods=["GET"])
-def get_latest_user_chart(user_id):
-    try:
-        user_chart = (
-            UserChart.query.filter_by(user_id=user_id)
-            .order_by(UserChart.created_at.desc())
-            .first()
-        )
-        if user_chart:
-            return (
-                jsonify(
-                    {
-                        "user_id": user_chart.user_id,
-                        "relation_type": user_chart.relation_type,
-                        "birth_data": user_chart.birth_data,
-                        "chart_json": user_chart.chart_json,
-                        "created_at": user_chart.created_at.isoformat(),
-                    }
-                ),
-                200,
-            )
-        else:
-            return jsonify({"code": "NOT_FOUND", "message": "no chart for user"}), 404
     except Exception as e:
-        return jsonify({"code": "SERVER_ERROR", "message": str(e)}), 500
+        logging.exception("Error generating kundli")
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "internal_error",
+                "message": "Unexpected error occurred."
+            }
+        }), 500
 
-
-@api_bp.route("/panchanga", methods=["GET"])
+@api_bp.route("/api/panchanga")
 def panchanga():
-    """
-    GET /api/panchanga?date=YYYY-MM-DD&tz=Asia/Kolkata&lat=..&lon=..
-    Returns Vara, Tithi, Nakshatra, Yoga, Karana.
-    Validation errors now return HTTP 400 instead of 500.
-    """
     try:
-        # Build + validate via Pydantic model
-        q = PanchangaQuery(
-            date=request.args.get("date", ""),
-            tz=request.args.get("tz", ""),
-            lat=float(request.args.get("lat", "nan")),
-            lon=float(request.args.get("lon", "nan")),
-        )
-    except PydanticValidationError as pe:
-        # Map pydantic errors to a clean 400
-        msg = _format_pydantic_error(pe)
-        current_app.logger.info(f"/api/panchanga 400: {msg}")
-        return jsonify({"code": "INVALID_REQUEST", "message": msg}), 400
-    except ValueError as ve:
-        # Covers float(...) casting or similar issues
-        msg = str(ve) or "Invalid request parameters"
-        current_app.logger.info(f"/api/panchanga 400: {msg}")
-        return jsonify({"code": "INVALID_REQUEST", "message": msg}), 400
-    except Exception:
-        current_app.logger.exception("Unexpected error while parsing /api/panchanga")
-        return (
-            jsonify(
-                {"code": ErrorCode.SERVER_ERROR.name, "message": "Internal server error"}
-            ),
-            500,
-        )
+        q = PanchangaQuery(**request.args)
 
-    # Call the real engine (already wired via api.get_panchanga)
-    try:
-        data = get_panchanga(q.date, q.tz, q.lat, q.lon)
-        return jsonify({"ok": True, "query": q.model_dump(), "panchanga": data}), 200
-    except Exception:
-        current_app.logger.exception("Unhandled error in /api/panchanga")
-        return (
-            jsonify(
-                {"code": ErrorCode.SERVER_ERROR.name, "message": "Internal server error"}
-            ),
-            500,
-        )
+        existing = PanchangaCache.query.filter_by(
+            date=q.date,
+            tz=q.tz,
+            lat=q.lat,
+            lon=q.lon
+        ).first()
+
+        if existing:
+            return jsonify({"ok": True, "panchanga": {**existing.result, "debug": {"from_cache": True}}, "query": request.args})
+
+        result = get_panchanga(q.date, q.tz, q.lat, q.lon)
+
+        db.session.add(PanchangaCache(
+            date=q.date,
+            tz=q.tz,
+            lat=q.lat,
+            lon=q.lon,
+            result=result
+        ))
+        db.session.commit()
+
+        return jsonify({"ok": True, "panchanga": {**result, "debug": {"from_cache": False}}, "query": request.args})
+
+    except ValidationError as ve:
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "validation_error",
+                "message": str(ve)
+            }
+        }), 400
+
+    except SQLAlchemyError as se:
+        db.session.rollback()
+        logging.exception("Database error in /api/panchanga")
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "database_error",
+                "message": str(se)
+            }
+        }), 500
+
+    except Exception as e:
+        logging.exception("Unhandled error in /api/panchanga")
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "internal_error",
+                "message": "Unexpected error occurred."
+            }
+        }), 500
+
+@api_bp.route("/health")
+def health():
+    return jsonify({"ok": True, "status": "healthy"})
+
+def register_error_handlers(app):
+    from flask import jsonify
+    from werkzeug.exceptions import HTTPException
+
+    @app.errorhandler(HTTPException)
+    def handle_http_exception(e):
+        response = e.get_response()
+        response.data = jsonify({
+            "ok": False,
+            "error": {
+                "code": e.code,
+                "name": e.name,
+                "description": e.description
+            }
+        }).data
+        response.content_type = "application/json"
+        return response
+
+    @app.errorhandler(Exception)
+    def handle_generic_exception(e):
+        import traceback
+        return jsonify({
+            "ok": False,
+            "error": {
+                "code": 500,
+                "name": "Internal Server Error",
+                "description": str(e),
+                "trace": traceback.format_exc()
+            }
+        }), 500
+
+
+__all__ = ["api_bp", "register_error_handlers"]
+
 
 ```
 
