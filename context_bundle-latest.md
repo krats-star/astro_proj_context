@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-16 17:16:23Z UTC**
-- Commit: `7d804ec23d40a55135aab099b53e035037fcc65f`
+- Generated: **2025-08-17 02:50:08Z UTC**
+- Commit: `002316b7c5c3caf0e3bb64e9fb7007e2ac64fd35`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -2895,7 +2895,7 @@ Columns:
 
 
 ```markdown
-# Astrological Chart for Manish
+# Astrological Chart For Manish
 
 ## Birth Details
 ### Birth Data
@@ -2910,7 +2910,7 @@ Columns:
 - **Longitude**: 78.088
 - **Timezone Str**: Asia/Kolkata
 
-## Avakahada Chakra (Vedic Foundational Details)
+## Avakahada Chakra
 - **Nakshatra**: Purva Bhadrapada
 - **Pada (Charan)**: 4
 - **Rasi (Sign)**: Pisces
@@ -2934,16 +2934,16 @@ Columns:
 ---
 
 ## Planetary Analysis
-### Planetary Positions & Shadbala
-| Planet | Longitude | Rasi D1 | D9 Sign | Nakshatra (Pada) | House | Dignity | Status | Ishta | Kashta | Total Shadbala |
+### Planetary Positions Shadbala
+| Planet | Longitude | Rasi D1 | D9 Sign | Nakshatra Pada | House | Dignity | Status | Ishta | Kashta | Total Shadbala |
 |---|---|---|---|---|---|---|---|---|---|---|
 | **Sun** | 51° 31' 47" / 21° 31' 47" taurus | Taurus | **Cancer** | Rohini (4) | 6 | Enemy Sign | Normal | 0.0 | 4.71 | **1.06** |
 | **Moon** | 330° 42' 52" / 0° 42' 52" pisces | Pisces | **Cancer** | Purva Bhadrapada (4) | 4 | Neutral Sign | Normal | 0.0 | 4.55 | **1.98** |
 | **Mars** | 81° 52' 56" / 21° 52' 56" gemini | Gemini | **Aries** | Punarvasu (1) | 7 | Enemy Sign | Normal | 0.0 | 4.71 | **0.76** |
-| **Mercury** | 52° 25' 11" / 22° 25' 11" taurus | Taurus | **Cancer** | Rohini (4) | 6 | Friendly Sign | Combust (0.89°) | 0.0 | 4.21 | **0.8** |
+| **Mercury** | 52° 25' 11" / 22° 25' 11" taurus | Taurus | **Cancer** | Rohini (4) | 6 | Friendly Sign | Combust With Dist | 0.0 | 4.21 | **0.8** |
 | **Jupiter** | 252° 19' 34" / 12° 19' 34" sagittarius | Sagittarius | **Cancer** | Moola (4) | 1 | Moolatrikona | Retrograde | 4.21 | 0.0 | **3.15** |
 | **Venus** | 69° 28' 48" / 9° 28' 48" gemini | Gemini | **Sagittarius** | Ardra (1) | 7 | Friendly Sign | Retrograde | 2.43 | 0.0 | **1.5** |
-| **Saturn** | 47° 9' 51" / 17° 9' 51" taurus | Taurus | **Gemini** | Rohini (3) | 6 | Friendly Sign | Combust (4.37°) | 0.0 | 4.21 | **0.35** |
+| **Saturn** | 47° 9' 51" / 17° 9' 51" taurus | Taurus | **Gemini** | Rohini (3) | 6 | Friendly Sign | Combust With Dist | 0.0 | 4.21 | **0.35** |
 | **Rahu** | 274° 51' 52" / 4° 51' 52" capricorn | Capricorn | **Aquarius** | Uttara Ashadha (3) | 2 | Node | Normal | N/A | N/A | **0.0** |
 | **Ketu** | 94° 51' 52" / 4° 51' 52" cancer | Cancer | **Leo** | Pushya (1) | 8 | Node | Normal | N/A | N/A | **0.0** |
 
@@ -2991,43 +2991,43 @@ Columns:
 - **Rahu** → *Libra*
 - **Ketu** → *Aries*
 
-## Advanced Planetary States (Avasthas)
-| Planet | Baladi Avastha (Age) | Deeptaadi Avastha (Disposition) | Lajjitaadi Avastha (Mood) |
+## Advanced Planetary States
+| Planet | Baladi Avastha | Deeptadi Avastha | Lajjitaadi Avastha |
 |---|---|---|---|
-| **Sun** | Kumara (Youthful) | Duhkhita (Miserable) | **Kshudhita (Starved)** |
-| **Moon** | Mrita (Dead) | Shanta (Peaceful) | **Shanta (Peaceful)** |
-| **Mars** | Vriddha (Aged) | Duhkhita (Miserable) | **Kshudhita (Starved)** |
-| **Mercury** | Kumara (Youthful) | Pramudita (Delighted) | **Mudita (Delighted)** |
-| **Jupiter** | Yuva (Adolescent/Prime) | Unknown | **Garvita (Proud)** |
-| **Venus** | Kumara (Youthful) | Pramudita (Delighted) | **Mudita (Delighted)** |
-| **Saturn** | Yuva (Adolescent/Prime) | Pramudita (Delighted) | **Mudita (Delighted)** |
+| **Sun** | Kumara | Duhkhita | **Kshudhita** |
+| **Moon** | Mrita | Shanta | **Shanta** |
+| **Mars** | Vriddha | Duhkhita | **Kshudhita** |
+| **Mercury** | Kumara | Pramudita | **Mudita** |
+| **Jupiter** | Yuva | Unknown | **Garvita** |
+| **Venus** | Kumara | Pramudita | **Mudita** |
+| **Saturn** | Yuva | Pramudita | **Mudita** |
 
 ---
 
 ## Core Astrological Evaluation
 ### House Classification Analysis
-- **Sun** Planet In House 6: Dusthana (Malefic), Upachaya (Growth)
-- **Moon** Planet In House 4: Kendra (Angular)
-- **Mars** Planet In House 7: Kendra (Angular)
-- **Mercury** Planet In House 6: Dusthana (Malefic), Upachaya (Growth)
-- **Jupiter** Planet In House 1: Kendra (Angular), Trikona (Trinal)
-- **Venus** Planet In House 7: Kendra (Angular)
-- **Saturn** Planet In House 6: Dusthana (Malefic), Upachaya (Growth)
+- **Sun** Planet In House 6: Dusthana Malefic, Upachaya Growth
+- **Moon** Planet In House 4: Kendra Angular
+- **Mars** Planet In House 7: Kendra Angular
+- **Mercury** Planet In House 6: Dusthana Malefic, Upachaya Growth
+- **Jupiter** Planet In House 1: Kendra Angular, Trikona Trinal
+- **Venus** Planet In House 7: Kendra Angular
+- **Saturn** Planet In House 6: Dusthana Malefic, Upachaya Growth
 - **Rahu** Planet In House 2: Neutral
-- **Ketu** Planet In House 8: Dusthana (Malefic)
+- **Ketu** Planet In House 8: Dusthana Malefic
 
-### Debilitation Cancellation (Neecha Bhanga) Analysis
+### Debilitation Cancellation Analysis
 No Debilitated Planets
 
-### Kemadruma Yoga (Loneliness of the Moon) Analysis
-- **Kemadruma Cancelled** Overridden by:
+### Kemadruma Yoga Analysis
+- **Kemadruma Cancelled** Overridden By
   - Planets In Kendra Asc
   - Moon In Kendra
 
 ---
 
-## Planetary Positional Strength (Bhava Madhya & Sandhi)
-| Planet | Planetary Positional Strength (Bhava Madhya & Sandhi) |
+## Planetary Positional Strength
+| Planet | Planetary Positional Strength |
 |---|---|
 | **Sun** | Very Strong At Bhava Madhya |
 | **Moon** | Normal Position |
@@ -3043,8 +3043,8 @@ No Debilitated Planets
 
 ## Major Dosha Analysis
 ### Mangal Dosha Analysis
-- **Status**: Present (Severity: **High**)
-- **Amplifying Factors (Strengthening the dosha):**
+- **Status**: Present Severity
+- **Amplifying Factors**
   - Mars is weak in an Enemy Sign.
 
 ---
@@ -3066,7 +3066,7 @@ No Debilitated Planets
 
 ---
 
-## Transit Analysis (Gochar)
+## Transit Analysis
 ### Peak Phase
 - **Status**: Saturn In Bindus
 ### Jupiter Transiting House 4
