@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-17 17:22:11Z UTC**
-- Commit: `05a2ceced6a38cc882887c3f02c905020d1526c5`
+- Generated: **2025-08-17 17:52:45Z UTC**
+- Commit: `2736d7c20fad6587e9582f362136ca431518e4be`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -213,6 +213,7 @@ __all__ = ["api_bp", "register_error_handlers"]
 ```python
 from extensions import db
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSON
 from datetime import datetime, timezone
 from extensions import db
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -400,6 +401,15 @@ class ChartCache(db.Model):
     lon = db.Column(db.Float, nullable=False)
     chart_json = db.Column(db.JSON, nullable=False)
     created_at = db.Column(db.DateTime, server_default=func.now())
+
+class AnalysisWeightsConfig(db.Model):
+    __tablename__ = 'analysis_weights_config'
+
+    id = db.Column(db.Integer, primary_key=True)
+    chart_id = db.Column(db.Integer, db.ForeignKey('user_chart.id'), nullable=False)  # 🔧 fix type here
+    weights_json = db.Column(JSON, nullable=True)
+
+    chart = db.relationship("UserChart", backref="analysis_weights_config")
 
 ```
 
