@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-17 03:58:07Z UTC**
-- Commit: `ba89d72a222075929652a347f224c04bb3c4f666`
+- Generated: **2025-08-17 04:03:47Z UTC**
+- Commit: `f24a9ba5f1cce17be253911cb9f96b7ac0036e0b`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -12,9 +12,9 @@
 2. [models.py](#modelspy)
 3. [analysis_engine.py](#analysis_enginepy)
 4. [astrological_evaluator.py](#astrological_evaluatorpy)
-5. [rohini_engine.py](#rohini_enginepy)
+5. [/home/runner/work/astro_proj/astro_proj/engines/rohini_engine.py](#homerunnerworkastro_projastro_projenginesrohini_enginepy)
 6. [orchestration_engine.py](#orchestration_enginepy)
-7. [astrological_constants.py](#astrological_constantspy)
+7. [/home/runner/work/astro_proj/astro_proj/engines/astrological_constants.py](#homerunnerworkastro_projastro_projenginesastrological_constantspy)
 8. [db_utils.py](#db_utilspy)
 9. [multilingual_strings.py](#multilingual_stringspy)
 10. [database_schema.md](#database_schemamd)
@@ -27,109 +27,184 @@
 
 
 ```python
+from flask import Blueprint, request, jsonify
+from models import UserChart, db, PanchangaCache, ChartCache
+from datetime import datetime
+from engines.panchang_engine import get_panchanga
+from engines.rohini_engine import generate_full_kundli
+from api.schemas import parse_kundli_request, ValidationError, PanchangaQuery
+from sqlalchemy.exc import SQLAlchemyError
+from werkzeug.exceptions import HTTPException
 import logging
-import os
 
-from extensions import db
-from models import UserChart, User
-from flask import Blueprint, jsonify, request, current_app
-from engine_adapter import call_generate_full_kundli
+api_bp = Blueprint("api", __name__)
 
-from api.schemas import parse_kundli_request, ValidationError
-from api.error_codes import ErrorCode
-
-api_bp = Blueprint('api', __name__)
-
-os.makedirs("logs", exist_ok=True)
-logger = logging.getLogger("T03e_flask")
-if not logger.handlers:
-    handler = logging.FileHandler("logs/T03e_flask.log")
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-
-@api_bp.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({'ok': True})
-
-@api_bp.route('/user', methods=['POST'])
-def create_user():
-    payload = request.get_json()
-    if not payload or 'user_id' not in payload:
-        return jsonify({"code": "INVALID_REQUEST", "message": "Missing user_id in payload"}), 400
-    user_id = payload['user_id']
-    if User.query.get(user_id):
-        return jsonify({"code": "CONFLICT", "message": f"User with ID {user_id} already exists"}), 409
-    try:
-        new_user = User(id=user_id)
-        db.session.add(new_user)
-        db.session.commit()
-        return jsonify({"message": f"User {user_id} created successfully"}), 201
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(f"Error creating user: {e}", exc_info=True)
-        return jsonify({"code": "SERVER_ERROR", "message": "Could not create user"}), 500
-
-@api_bp.route('/kundli/generate', methods=['POST'])
+@api_bp.route("/api/kundli/generate", methods=["POST"])
 def generate_kundli():
     try:
-        parsed = parse_kundli_request(request.get_json())
-    except ValidationError as ve:
-        logger.error(ve.message)
-        return jsonify({"code": ve.code.code, "message": ve.message}), ve.http_status
-    except Exception as e:
-        logger.exception("Unexpected error while parsing request")
-        return jsonify({"code": ErrorCode.SERVER_ERROR.code, "message": "Internal server error"}), ErrorCode.SERVER_ERROR.http_status
+        data = parse_kundli_request(request.get_json())
 
-    try:
-        chart_json = call_generate_full_kundli(parsed.birth_datetime, parsed.lat, parsed.lon, parsed.tz)
+        existing = ChartCache.query.filter_by(
+            birth_datetime=data["birth_datetime"],
+            tz=data["tz"],
+            lat=data["lat"],
+            lon=data["lon"]
+        ).first()
 
-        user_chart = UserChart.query.filter_by(user_id=parsed.user_id, relation_type='self').first()
-        if user_chart:
-            user_chart.birth_data = parsed.original_payload
-            user_chart.chart_json = chart_json
-            user_chart.birth_datetime = parsed.birth_datetime
-            user_chart.tz = parsed.tz
-            user_chart.lat = parsed.lat
-            user_chart.lon = parsed.lon
-        else:
-            user_chart = UserChart(
-                user_id=parsed.user_id,
-                relation_type='self',
-                birth_data=parsed.original_payload,
-                chart_json=chart_json,
-                birth_datetime=parsed.birth_datetime,
-                tz=parsed.tz,
-                lat=parsed.lat,
-                lon=parsed.lon,
-            )
-            db.session.add(user_chart)
+        if existing:
+            return jsonify({"ok": True, "from_cache": True, "chart": existing.chart_json})
+
+        chart_data = generate_full_kundli({
+            'timezone_str': timezone,
+            'year': dt.year,
+            'month': dt.month,
+            'day': dt.day,
+            'hour': dt.hour,
+            'minute': dt.minute,
+            'second': dt.second,
+            'latitude': lat,
+            'longitude': lon
+        })
+
+        cache = ChartCache(
+            birth_datetime=data["birth_datetime"],
+            tz=data["tz"],
+            lat=data["lat"],
+            lon=data["lon"],
+            chart_json=chart_data
+        )
+        db.session.add(cache)
         db.session.commit()
 
-        latest = UserChart.query.filter_by(user_id=parsed.user_id, relation_type='self').order_by(UserChart.updated_at.desc()).first()
-        return jsonify({"user_chart_id": latest.id, "chart_json": latest.chart_json}), 200
-    except Exception as e:
-        db.session.rollback()
-        logger.exception("Error generating kundli")
-        return jsonify({"code": ErrorCode.SERVER_ERROR.code, "message": "Internal server error"}), ErrorCode.SERVER_ERROR.http_status
+        return jsonify({"ok": True, "from_cache": False, "chart": chart_data})
 
-@api_bp.route('/user/chart/<int:user_id>', methods=['GET'])
-def get_latest_user_chart(user_id):
-    try:
-        user_chart = UserChart.query.filter_by(user_id=user_id).order_by(UserChart.created_at.desc()).first()
-        if user_chart:
-            return jsonify({
-                "user_id": user_chart.user_id,
-                "relation_type": user_chart.relation_type,
-                "birth_data": user_chart.birth_data,
-                "chart_json": user_chart.chart_json,
-                "created_at": user_chart.created_at.isoformat()
-            }), 200
-        else:
-            return jsonify({"code": "NOT_FOUND", "message": "no chart for user"}), 404
+    except ValidationError as ve:
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "validation_error",
+                "message": str(ve)
+            }
+        }), 400
+
+    except SQLAlchemyError as se:
+        db.session.rollback()
+        logging.exception("Database error while generating kundli")
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "database_error",
+                "message": str(se)
+            }
+        }), 500
+
     except Exception as e:
-        return jsonify({"code": "SERVER_ERROR", "message": str(e)}), 500
+        logging.exception("Error generating kundli")
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "internal_error",
+                "message": "Unexpected error occurred."
+            }
+        }), 500
+
+@api_bp.route("/api/panchanga")
+def panchanga():
+    try:
+        q = PanchangaQuery(**request.args)
+
+        existing = PanchangaCache.query.filter_by(
+            date=q.date,
+            tz=q.tz,
+            lat=q.lat,
+            lon=q.lon
+        ).first()
+
+        if existing:
+            return jsonify({"ok": True, "panchanga": {**existing.result, "debug": {"from_cache": True}}, "query": request.args})
+
+        result = get_panchanga(q.date, q.tz, q.lat, q.lon)
+
+        db.session.add(PanchangaCache(
+            date=q.date,
+            tz=q.tz,
+            lat=q.lat,
+            lon=q.lon,
+            result=result
+        ))
+        db.session.commit()
+
+        return jsonify({"ok": True, "panchanga": {**result, "debug": {"from_cache": False}}, "query": request.args})
+
+    except ValidationError as ve:
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "validation_error",
+                "message": str(ve)
+            }
+        }), 400
+
+    except SQLAlchemyError as se:
+        db.session.rollback()
+        logging.exception("Database error in /api/panchanga")
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "database_error",
+                "message": str(se)
+            }
+        }), 500
+
+    except Exception as e:
+        logging.exception("Unhandled error in /api/panchanga")
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "internal_error",
+                "message": "Unexpected error occurred."
+            }
+        }), 500
+
+@api_bp.route("/health")
+def health():
+    return jsonify({"ok": True, "status": "healthy"})
+
+def register_error_handlers(app):
+    from flask import jsonify
+    from werkzeug.exceptions import HTTPException
+
+    @app.errorhandler(HTTPException)
+    def handle_http_exception(e):
+        response = e.get_response()
+        response.data = jsonify({
+            "ok": False,
+            "error": {
+                "code": e.code,
+                "name": e.name,
+                "description": e.description
+            }
+        }).data
+        response.content_type = "application/json"
+        return response
+
+    @app.errorhandler(Exception)
+    def handle_generic_exception(e):
+        import traceback
+        return jsonify({
+            "ok": False,
+            "error": {
+                "code": 500,
+                "name": "Internal Server Error",
+                "description": str(e),
+                "trace": traceback.format_exc()
+            }
+        }), 500
+
+
+__all__ = ["api_bp", "register_error_handlers"]
+
+
 ```
 
 ### models.py
@@ -141,10 +216,15 @@ from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime, timezone
 from extensions import db
 from werkzeug.security import generate_password_hash, check_password_hash
+from sqlalchemy.sql import func
+
 
 class User(db.Model):
+    __tablename__ = "user"
+
     id = db.Column(db.Integer, primary_key=True)
-    # Add other user-related fields as needed, e.g., email, username, etc.
+    email = db.Column(db.String, unique=True, nullable=False)
+    full_name = db.Column(db.String, nullable=True)
 
     def __repr__(self):
         return f"<User {self.id}>"
@@ -163,6 +243,19 @@ class SocialPost(db.Model):
 
     def __repr__(self):
         return f"<SocialPost {self.unique_post_id}>"
+
+class PanchangaCache(db.Model):
+    __tablename__ = "panchanga_cache"
+    id = db.Column(db.Integer, primary_key=True)
+    date = db.Column(db.String, nullable=False)
+    tz = db.Column(db.String, nullable=False)
+    lat = db.Column(db.Float, nullable=False)
+    lon = db.Column(db.Float, nullable=False)
+    result = db.Column(db.JSON, nullable=False)
+
+    __table_args__ = (
+        db.UniqueConstraint('date', 'tz', 'lat', 'lon', name='uq_panchanga_cache'),
+    )
 
 class Keyword(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -295,6 +388,19 @@ class LLMPrompts(db.Model):
 
     def __repr__(self):
         return f'<LLMPrompts {self.prompt_id}>'
+
+class ChartCache(db.Model):
+    __tablename__ = "chart_cache"
+    __table_args__ = (db.UniqueConstraint("birth_datetime", "tz", "lat", "lon", name="uq_chart_cache"),)
+
+    id = db.Column(db.Integer, primary_key=True)
+    birth_datetime = db.Column(db.DateTime, nullable=False)
+    tz = db.Column(db.String, nullable=False)
+    lat = db.Column(db.Float, nullable=False)
+    lon = db.Column(db.Float, nullable=False)
+    chart_json = db.Column(db.JSON, nullable=False)
+    created_at = db.Column(db.DateTime, server_default=func.now())
+
 ```
 
 ### analysis_engine.py
@@ -1140,7 +1246,7 @@ def get_aspects_on_house(target_house, kundli):
     return list(set(aspecting_planets))
 ```
 
-### rohini_engine.py
+### /home/runner/work/astro_proj/astro_proj/engines/rohini_engine.py
 
 
 ```python
@@ -1161,7 +1267,7 @@ import pytz
 import os
 import swisseph as swe
 import math
-import astrological_constants as ac
+from engines import astrological_constants as ac
 
 # --- Init Swiss Ephemeris ---
 swe.set_ephe_path(os.path.join(os.path.dirname(__file__), 'sweph_data'))
@@ -1922,7 +2028,7 @@ def compile_analytical_brief(user_chart, trigger_context, related_charts=None):
 
 ```
 
-### astrological_constants.py
+### /home/runner/work/astro_proj/astro_proj/engines/astrological_constants.py
 
 
 ```python
