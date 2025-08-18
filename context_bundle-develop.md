@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-17 07:23:06Z UTC**
-- Commit: `074fb562558aaf815c5be7b9921f191f101b38f0`
+- Generated: **2025-08-18 18:47:50Z UTC**
+- Commit: `b15d28438f3573b75013f78d9336d8ea1045dbdc`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -13,7 +13,7 @@
 3. [/home/runner/work/astro_proj/astro_proj/engines/analysis_engine.py](#homerunnerworkastro_projastro_projenginesanalysis_enginepy)
 4. [/home/runner/work/astro_proj/astro_proj/engines/astrological_evaluator.py](#homerunnerworkastro_projastro_projenginesastrological_evaluatorpy)
 5. [/home/runner/work/astro_proj/astro_proj/engines/rohini_engine.py](#homerunnerworkastro_projastro_projenginesrohini_enginepy)
-6. [orchestration_engine.py](#orchestration_enginepy)
+6. [/home/runner/work/astro_proj/astro_proj/engines/orchestration_engine.py](#homerunnerworkastro_projastro_projenginesorchestration_enginepy)
 7. [/home/runner/work/astro_proj/astro_proj/engines/astrological_constants.py](#homerunnerworkastro_projastro_projenginesastrological_constantspy)
 8. [db_utils.py](#db_utilspy)
 9. [multilingual_strings.py](#multilingual_stringspy)
@@ -213,6 +213,7 @@ __all__ = ["api_bp", "register_error_handlers"]
 ```python
 from extensions import db
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSON
 from datetime import datetime, timezone
 from extensions import db
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -223,7 +224,17 @@ class User(db.Model):
     __tablename__ = "user"
 
     id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String, unique=True, nullable=False)
+
+    # Optional email
+    email = db.Column(db.String, unique=True, nullable=True)
+
+    # New fields for mobile authentication
+    mobile_number = db.Column(db.String(15), unique=True, nullable=False)
+    is_mobile_verified = db.Column(db.Boolean, default=False, nullable=False)
+
+    # Optional: track source of auth
+    auth_provider = db.Column(db.String(50), default="firebase", nullable=False)
+
     full_name = db.Column(db.String, nullable=True)
 
     def __repr__(self):
@@ -401,6 +412,15 @@ class ChartCache(db.Model):
     chart_json = db.Column(db.JSON, nullable=False)
     created_at = db.Column(db.DateTime, server_default=func.now())
 
+class AnalysisWeightsConfig(db.Model):
+    __tablename__ = 'analysis_weights_config'
+
+    id = db.Column(db.Integer, primary_key=True)
+    chart_id = db.Column(db.Integer, db.ForeignKey('user_chart.id'), nullable=False)  # 🔧 fix type here
+    weights_json = db.Column(JSON, nullable=True)
+
+    chart = db.relationship("UserChart", backref="analysis_weights_config")
+
 ```
 
 ### /home/runner/work/astro_proj/astro_proj/engines/analysis_engine.py
@@ -530,29 +550,38 @@ def get_lajjitaadi_avasthas(planet_name, kundli):
 # Planetary Data Consolidation
 # -------------------------------------------------------------------
 
+
 def get_all_planetary_data(user_chart):
     planetary_findings = []
 
-    for pname, pdata in user_chart['planets'].items():
+    for pname in user_chart["planets"]:
+        # This combines the setup from both blocks
+        pdata = user_chart.get("planets", {}).get(pname, {}) 
         finding = {
-            "type": "planetary_position",
-            "name": f"{pname.capitalize()} Position",
-            "key": f"{pname}_position",
-            "relevant_planet": pname,
-            "relevant_house": pdata['house'],
-            "details": pdata.copy(),
+            "feature_type": "planet_position",
+            "planet": pname,
+            "sign": pdata.get("sign", "unknown"),
+            "house": pdata.get("house", "unknown"),
+            "degree": pdata.get("longitude", "unknown"),
+            "details": {},
+            "meta": {"source": "get_all_planetary_data"}
         }
+        
+        # Dignity and Status (from the second block's logic)
+        finding['details']['dignity'] = pdata.get('dignity', 'N/A')
+        finding['details']['status'] = pdata.get('status', 'N/A')
 
-        # Avasthas
+        # Avasthas (from the second block)
         av = get_planet_avasthas(pname, user_chart)
         finding['details']['baladi_avastha'] = av.get('baladi')
         finding['details']['deeptadi_avastha'] = av.get('deeptadi')
         finding['details']['lajjitaadi_avastha'] = get_lajjitaadi_avasthas(pname, user_chart)
 
-        # Positional Strength (prefer sidereal cusps)
+        # Positional Strength (from the second block)
         cusps = user_chart.get('house_cusps_sidereal') or user_chart.get('house_cusps')
-        pos = evaluator.evaluate_planetary_positional_strength(pdata['longitude'], pdata['house'], cusps)
-        finding['details']['bhava_positional_strength'] = pos.get('status')
+        if cusps:
+            pos = evaluator.evaluate_planetary_positional_strength(pdata['longitude'], pdata['house'], cusps)
+            finding['details']['bhava_positional_strength'] = pos.get('status')
 
         # Bhavesha Strength Summary
         finding['details']['bhavesha_strength_summary'] = evaluator.evaluate_bhavesha_strength(user_chart, pdata['house'])
@@ -566,23 +595,21 @@ def get_all_planetary_data(user_chart):
 
         # Vargottama
         finding['details']['vargottama_status'] = (pdata.get('d9_sign') == pdata.get('sign'))
-
-        # Pre-written insight keys (for KB)
+     
+        # Pre-written insight keys (from the second block)
         finding['pre_written_insight_keys'] = [
             {"category": "graha-", "key": pname},
             {"category": "graha_in_bhava", "key": f"{pname}_in_{pdata['house']}th_house"},
             {"category": "graha_in_rashi", "key": f"{pname}_in_{pdata['sign']}"},
-            {"category": "planet_in_navamsa", "key": f"{pname}_in_{pdata['d9_sign']}"},
-            {"category": "planetary_avastha", "key": f"{pname}_baladi_{finding['details']['baladi_avastha']}"} if finding['details'].get('baladi_avastha') != 'n/a' else None,
-            {"category": "planetary_avastha", "key": f"{pname}_deeptadi_{finding['details']['deeptadi_avastha']}"} if finding['details'].get('deeptadi_avastha') != 'n/a' else None,
-            {"category": "planetary_avastha", "key": f"{pname}_lajjitaadi_{finding['details']['lajjitaadi_avastha']}"} if finding['details'].get('lajjitaadi_avastha') != 'n/a' else None,
-            {"category": "planetary_dignity", "key": f"{pname}_{finding['details']['dignity'].lower().replace(' ', '_')}"},
-            {"category": "planetary_status", "key": f"{pname}_{finding['details']['status'].lower().split(' ')[0]}"},
+            # ... other keys
         ]
         finding['pre_written_insight_keys'] = [k for k in finding['pre_written_insight_keys'] if k]
+
+        # Finally, append the detailed `finding` dictionary to our list
         planetary_findings.append(finding)
 
     return planetary_findings
+
 
 # -------------------------------------------------------------------
 # Doshas
@@ -1812,7 +1839,7 @@ def sign_deg_to_deg(sign: str, deg_in_sign: float) -> float:
     return wrap_angle(sign_index * 30 + deg_in_sign)
 ```
 
-### orchestration_engine.py
+### /home/runner/work/astro_proj/astro_proj/engines/orchestration_engine.py
 
 
 ```python
@@ -1820,9 +1847,10 @@ def sign_deg_to_deg(sign: str, deg_in_sign: float) -> float:
 
 import math
 from datetime import datetime
-import db_utils # For fetching weights, interpretations, and LLM prompts
-import rohini_engine # For transit positions (called by analysis_engine)
-import analysis_engine # The re-scoped analysis core
+from engines import rohini_engine
+from engines import analysis_engine
+from engines import astrological_evaluator  # if used
+from utils import db_utils  # if db_utils is in utils/
 
 # --- Dynamic Weights Loading ---
 _dynamic_weights = {} # Module-level variable to store loaded weights
@@ -2916,10 +2944,10 @@ Columns:
 - **Rasi (Sign)**: Pisces
 - **Lagna (Ascendant)**: Sagittarius
 - **Varna (Function)**: Brahmin
-- **Vashya (Influence)**: Jalachara
+- **Vashya (Influence)**: Water-being
 - **Yoni (Nature)**: Lion
-- **Gana (Temperament)**: Manushya
-- **Nadi (Constitution)**: Adi
+- **Gana (Temperament)**: Manushya (Human)
+- **Nadi (Constitution)**: Adi (Vata)
 - **Nakshatra Lord**: Jupiter
 ## Panchang at Birth
 | Limb | Value | Lord | Notes |
@@ -3021,8 +3049,8 @@ No Debilitated Planets
 
 ### Kemadruma Yoga Analysis
 - **Kemadruma Cancelled** Overridden By
-  - Planets In Kendra Asc
   - Moon In Kendra
+  - Planets In Kendra Asc
 
 ---
 
