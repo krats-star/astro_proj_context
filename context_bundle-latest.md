@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-20 11:31:52Z UTC**
-- Commit: `8d25b01aa39af2af0f41f1bcbaf0463800207803`
+- Generated: **2025-08-20 11:43:16Z UTC**
+- Commit: `13b21a4d955bdcb83413b7c2047cddb825e34172`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -297,16 +297,19 @@ class Video(db.Model):
 import uuid
 
 class UserChart(db.Model):
-    __tablename__ = "user_chart"
-
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
-
-    # Columns that exist in your Supabase table:
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False) # Foreign key to user table
+    relation_type = db.Column(db.Text, nullable=False, default='self')
     birth_data = db.Column(JSONB, nullable=False)
     chart_json = db.Column(JSONB, nullable=False)
+    birth_datetime = db.Column(db.TIMESTAMP(timezone=True), nullable=False)
+    tz = db.Column(db.Text, nullable=False)
+    lat = db.Column(db.Float, nullable=False)
+    lon = db.Column(db.Float, nullable=False)
+    created_at = db.Column(db.TIMESTAMP(timezone=True), server_default=db.func.now(), nullable=True)
+    updated_at = db.Column(db.TIMESTAMP(timezone=True), server_default=db.func.now(), onupdate=db.func.now(), nullable=True)
 
-    # NOTE: Do not add extra non-nullable fields unless you also add them to the DB via migrations.
+    __table_args__ = (db.UniqueConstraint('user_id', 'relation_type', name='_user_relation_uc'),)
 
     def __repr__(self):
         return f"<UserChart {self.id} for User {self.user_id}>"
@@ -418,38 +421,6 @@ class AnalysisWeightsConfig(db.Model):
 
     chart = db.relationship("UserChart", backref="analysis_weights_config")
 
-class BriefTemplate(db.Model):
-    __tablename__ = 'brief_templates'
-
-    id = db.Column(db.String, primary_key=True)  # e.g. MUHURTA_BUSINESS_START_V1
-    category = db.Column(db.String, nullable=False)  # e.g. muhurta.business_start
-    intents = db.Column(JSONB, nullable=False)  # e.g. ["muhurta_query"]
-    time_windows = db.Column(JSONB, nullable=False)  # e.g. ["next_7_days"]
-    patterns = db.Column(JSONB, nullable=False)  # per locale matchers
-    signals = db.Column(JSONB, nullable=True)  # {"needs_chart": true, ...}
-    data_requirements = db.Column(JSONB, nullable=True)  # e.g. ["birth_data"]
-    scoring = db.Column(JSONB, nullable=True)  # weights, decay config
-    llm_prompt_key = db.Column(db.String, nullable=True)
-    brief_schema = db.Column(JSONB, nullable=False)  # structured draft layout
-    version = db.Column(db.String, default="v1.0.0")
-    last_updated = db.Column(db.DateTime, default=datetime.now(timezone.utc), nullable=False)
-    is_active = db.Column(db.Boolean, default=True, nullable=False)
-
-    def __repr__(self):
-        return f'<BriefTemplate {self.id}>'
-
-class BriefProvenanceLog(db.Model):
-    __tablename__ = "brief_provenance_logs"
-    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
-    user_id = db.Column(db.BigInteger, nullable=True)
-    template_id = db.Column(db.String, nullable=False, index=True)
-    matched_by = db.Column(db.String, nullable=False)   # 'pattern' | 'embedding' | 'llm'
-    score = db.Column(db.Float, nullable=False)
-    locale = db.Column(db.String, nullable=True)
-    inputs_hash = db.Column(db.String, nullable=True)
-    trigger = db.Column(db.String, nullable=True)       # 'user_query', 'scheduled', etc.
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-
 ```
 
 ### /home/runner/work/astro_proj/astro_proj/engines/analysis_engine.py
@@ -468,14 +439,6 @@ from engines import rohini_engine  # For transit positions if needed
 # -------------------------------------------------------------------
 # Utils
 # -------------------------------------------------------------------
-
-# Safe date parse
-def _safe_parse_date(s: str):
-    try:
-        return datetime.strptime(s, "%Y-%m-%d").date()
-    except Exception:
-        return None
-
 
 def _norm_angle(lon: float) -> float:
     return lon % 360.0
@@ -1039,87 +1002,33 @@ def analyze_transits(natal_chart, transit_positions, ashtakavarga_scores):
     return analysis
 
 def analyze_dasha_gochar_synthesis(natal_chart, transit_positions):
-    """
-    Return the current MD/AD finding if we can identify it from either:
-    - vimshottari_dasha: [{ start_date, end_date, dasha_lord, antardashas: [{ start_date, end_date, antardasha_lord }] }]
-    - active_dasha:      [{ start_date, end_date, dasha_lord|mahadasha_lord, antardasha_lord|bhukti_lord }]
-    If dates/keys are missing, skip that segment instead of crashing.
-    """
     findings = []
     today = datetime.now().date()
-
-    # ---- Path A: nested Vimshottari blocks ----
-    md_blocks = natal_chart.get("vimshottari_dasha") or []
-    if isinstance(md_blocks, list) and md_blocks:
-        for md in md_blocks:
-            md_start = _safe_parse_date(md.get("start_date"))
-            md_end   = _safe_parse_date(md.get("end_date"))
-            if not (md_start and md_end and md_start <= today <= md_end):
-                continue
-
-            md_lord = md.get("dasha_lord") or md.get("mahadasha_lord")
-            # accept antardashas / alternative key names if present
-            ad_blocks = md.get("antardashas") or md.get("antardasha") or md.get("bhukti") or []
-            for ad in ad_blocks:
-                ad_start = _safe_parse_date(ad.get("start_date"))
-                ad_end   = _safe_parse_date(ad.get("end_date"))
-                if not (ad_start and ad_end and ad_start <= today <= ad_end):
-                    continue
-
-                ad_lord = ad.get("antardasha_lord") or ad.get("bhukti_lord")
-                if not (md_lord and ad_lord):
-                    continue
-
-                findings.append({
-                    "type": "dasha",
-                    "name": "Current Dasha Period",
-                    "key": f"{md_lord}_mahadasha_{ad_lord}_antardasha",
-                    "mahadasha_lord": md_lord,
-                    "antardasha_lord": ad_lord,
-                    "start_date": ad_start.strftime("%Y-%m-%d"),
-                    "end_date": ad_end.strftime("%Y-%m-%d"),
-                    "pre_written_insight_keys": [
-                        {"category": "mahadasha_interpretation", "key": md_lord},
-                        {"category": "antardasha_interpretation", "key": f"{md_lord}_{ad_lord}"}
-                    ]
-                })
-                return findings  # first matching window suffices
-
-    # ---- Path B: flat, already-resolved active_dasha blocks ----
-    flat_blocks = natal_chart.get("active_dasha") or []
-    if isinstance(flat_blocks, list) and flat_blocks:
-        for seg in flat_blocks:
-            s = _safe_parse_date(seg.get("start_date"))
-            e = _safe_parse_date(seg.get("end_date"))
-            if not (s and e and s <= today <= e):
-                continue
-            md_lord = seg.get("dasha_lord") or seg.get("mahadasha_lord")
-            ad_lord = seg.get("antardasha_lord") or seg.get("bhukti_lord")
-            if not (md_lord and ad_lord):
-                continue
-            findings.append({
-                "type": "dasha",
-                "name": "Current Dasha Period",
-                "key": f"{md_lord}_mahadasha_{ad_lord}_antardasha",
-                "mahadasha_lord": md_lord,
-                "antardasha_lord": ad_lord,
-                "start_date": s.strftime("%Y-%m-%d"),
-                "end_date": e.strftime("%Y-%m-%d"),
-                "pre_written_insight_keys": [
-                    {"category": "mahadasha_interpretation", "key": md_lord},
-                    {"category": "antardasha_interpretation", "key": f"{md_lord}_{ad_lord}"}
-                ]
-            })
-            return findings
-
-    # Fallback: keep your existing not-found packet
-    return [{
-        "type": "dasha",
-        "name": "Current Dasha Period",
-        "key": "dasha_period_not_found",
-        "finding": "Current Dasha period not found.",
-        "pre_written_insight_keys": []
-    }]
+    for md in natal_chart.get('vimshottari_dasha', []):
+        md_start = datetime.strptime(md['start_date'], "%Y-%m-%d").date()
+        md_end = datetime.strptime(md['end_date'], "%Y-%m-%d").date()
+        if md_start <= today <= md_end:
+            md_lord = md['dasha_lord']
+            for ad in md.get('antardashas', []):
+                ad_start = datetime.strptime(ad['start_date'], "%Y-%m-%d").date()
+                ad_end = datetime.strptime(ad['end_date'], "%Y-%m-%d").date()
+                if ad_start <= today <= ad_end:
+                    ad_lord = ad['antardasha_lord']
+                    findings.append({
+                        "type": "dasha",
+                        "name": "Current Dasha Period",
+                        "key": f"{md_lord}_mahadasha_{ad_lord}_antardasha",
+                        "mahadasha_lord": md_lord,
+                        "antardasha_lord": ad_lord,
+                        "start_date": ad_start.strftime("%Y-%m-%d"),
+                        "end_date": ad_end.strftime("%Y-%m-%d"),
+                        "pre_written_insight_keys": [
+                            {"category": "mahadasha_interpretation", "key": md_lord},
+                            {"category": "antardasha_interpretation", "key": f"{md_lord}_{ad_lord}"}
+                        ]
+                    })
+                    return findings
+    return [{"type": "dasha", "name": "Current Dasha Period", "key": "dasha_period_not_found", "finding": "Current Dasha period not found.", "pre_written_insight_keys": []}]
 
 
 def analyze_patterns(kundli):
@@ -1942,10 +1851,6 @@ from engines import rohini_engine
 from engines import analysis_engine
 from engines import astrological_evaluator  # if used
 from utils import db_utils  # if db_utils is in utils/
-from services.matching_pipeline import select_template_with_fallbacks
-from services.provenance import record_provenance_from_match
-
-
 
 # --- Dynamic Weights Loading ---
 _dynamic_weights = {} # Module-level variable to store loaded weights
@@ -2211,43 +2116,15 @@ def compile_analytical_brief(user_chart, trigger_context, related_charts=None):
     analytical_brief['master_persona_prompt'] = db_utils.fetch_prompt_template('master_persona', language)
     analytical_brief['analytical_brief_template'] = db_utils.fetch_prompt_template('analytical_brief', language)
 
-    # ---- (NEW) Match a template & record provenance ----
-    try:
-        q = trigger_context.get('query') or trigger_context.get('event') or ""
-        locale = language
-        # call your existing matching pipeline
-        match_res = select_template_with_fallbacks(q, locale=locale)
-
-        # save provenance using your working helper from tests
-        record_provenance_from_match(
-            match_res,
-            user_id=user_chart.get('user_id', None),
-            locale=locale,
-            inputs={"query": q, "locale": locale},
-            trigger=trigger_context.get('type', 'user_query'),
-        )
-
-        # (Optional) If you want to expose which template matched, uncomment:
-        # analytical_brief['matched_template_id'] = match_res.get('template_id')
-        # analytical_brief['match_explainer'] = {
-        #     "matched_by": match_res.get("matched_by"),
-        #     "score": match_res.get("score"),
-        #     "reason": match_res.get("reason"),
-        # }
-    except Exception:
-        # brief generation must not crash on logging failure
-        pass
-    # ---- end NEW ----
-
     # Placeholder for related_chart_analysis if provided
     if related_charts:
         analytical_brief['related_chart_analysis'] = {
-            "chart_details": {  # Simplified details for related chart
+            "chart_details": { # Simplified details for related chart
                 "name": related_charts[0].get('birth_data', {}).get('name'),
                 "relation_type": related_charts[0].get('relation_type', 'unknown')
             },
-            "compatibility_findings": [],  # To be populated in future tasks
-            "progeny_indicators": []  # To be populated in future tasks
+            "compatibility_findings": [], # To be populated in future tasks
+            "progeny_indicators": [] # To be populated in future tasks
         }
 
     return analytical_brief
