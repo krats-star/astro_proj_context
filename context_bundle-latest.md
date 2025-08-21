@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-21 17:16:53Z UTC**
-- Commit: `259a60683cc4f4b0c6f932ae1ab4f1a1598c7c94`
+- Generated: **2025-08-21 17:27:45Z UTC**
+- Commit: `dd8cc86ca8d64b51a5a608dbd31c0a97e1b8477a`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -2010,6 +2010,7 @@ def sign_deg_to_deg(sign: str, deg_in_sign: float) -> float:
 
 import math
 import os
+import time
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -2022,8 +2023,11 @@ from services.provenance import record_provenance_from_match
 
 # --- Task 7: Resolver integration (flag-guarded) ---
 from services.feature_resolver import FeatureResolver
-from services.feature_ids import FeatureID
+from services.feature_ids import FeatureID, MAX_FEATURE_ID
+from services.feature_registry import REGISTRY
+from services.bitset import Bitset
 from models import UserChart, db
+
 
 
 def _feature_resolver_enabled():
@@ -2065,9 +2069,9 @@ def heal_chart_features_by_id(chart_id: int, feature_ids=None) -> dict:
     }
 
     # Resolve + apply mutations to the row (no commit inside)
-    _resolve_and_persist_features_for_row(row, feature_ids)
+    metrics = _resolve_and_persist_features_for_row(row, feature_ids)
 
-    # Commit once if persistence is enabled and changes were made
+#     Commit once if persistence is enabled
     if _feature_resolver_persist_enabled():
         try:
             db.session.add(row)
@@ -2075,6 +2079,7 @@ def heal_chart_features_by_id(chart_id: int, feature_ids=None) -> dict:
         except Exception as e:
             db.session.rollback()
             return {"ok": False, "reason": f"commit_failed: {e}", "chart_id": chart_id}
+
 
     after = {
         "has_bits": row.feature_presence_bits is not None,
@@ -2090,6 +2095,7 @@ def heal_chart_features_by_id(chart_id: int, feature_ids=None) -> dict:
         "persist_enabled": _feature_resolver_persist_enabled(),
         "before": before,
         "after": after,
+        "metrics": metrics,
         "ascendant": {"longitude": asc.get("longitude"), "sign": asc.get("sign")},
         "sun": {"longitude": sun.get("longitude"), "sign": sun.get("sign"), "shadbala_total": (sun.get("shadbala") or {}).get("total")},
         "moon": {"longitude": moon.get("longitude"), "sign": moon.get("sign"), "nakshatra": moon.get("nakshatra"), "pada": moon.get("pada"), "shadbala_total": (moon.get("shadbala") or {}).get("total")},
@@ -2257,19 +2263,34 @@ def _fetch_and_format_insights(finding, language):
 def _resolve_and_persist_features_for_row(chart_row, feature_ids):
     """
     Uses the Task 7 resolver on a real ORM row (UserChart), applies in-memory
-    mutations (chart_json, presence bits, version hash). This helper DOES NOT
-    commit; the caller (e.g., heal_chart_features_by_id) is responsible for committing.
+    mutations (chart_json, presence bits, version hash). DOES NOT COMMIT.
+    Returns a small metrics dict for observability.
     """
     if not _feature_resolver_enabled():
-        return None  # feature resolver globally disabled
+        return {"skipped": True, "reason": "resolver_disabled"}
 
-    # Resolve & apply to row (no commit here)
+    # bits before
+    bits_before = Bitset.from_bytes(MAX_FEATURE_ID, chart_row.feature_presence_bits)
+    had_bits_before = sum(1 for fid in feature_ids if bits_before.has(int(fid)))
+
+    t0 = time.perf_counter()
     resolver = FeatureResolver(chart_row)
     _ = resolver.get_features(feature_ids)
     resolver.apply_to_row()
+    duration_ms = (time.perf_counter() - t0) * 1000.0
 
-    # Return the (possibly) updated chart dict
-    return chart_row.chart_json
+    # bits after
+    bits_after = Bitset.from_bytes(MAX_FEATURE_ID, chart_row.feature_presence_bits)
+    newly_set_ids = [int(fid) for fid in feature_ids if (not bits_before.has(int(fid))) and bits_after.has(int(fid))]
+    healed_keys = [REGISTRY.features[fid].key for fid in newly_set_ids if fid in REGISTRY.features]
+
+    return {
+        "requested": len(feature_ids),
+        "had_bits_before": had_bits_before,
+        "newly_set": len(newly_set_ids),
+        "healed_keys": healed_keys,
+        "duration_ms": round(duration_ms, 2),
+    }
 
 
 def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
