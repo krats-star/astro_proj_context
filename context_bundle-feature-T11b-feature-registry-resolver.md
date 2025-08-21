@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-21 15:02:22Z UTC**
-- Commit: `cdf1b1e16aac2ef9473343b02eedf9b3b3d9ec11`
+- Generated: **2025-08-21 16:34:12Z UTC**
+- Commit: `0db93a8223926b4d1aa26b8a1c2e7deed919b865`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -2009,7 +2009,10 @@ def sign_deg_to_deg(sign: str, deg_in_sign: float) -> float:
 # orchestration_engine.py (NEW Module: Handles orchestration, weighting, and LLM brief compilation)
 
 import math
+import os
 from datetime import datetime
+from types import SimpleNamespace
+
 from engines import rohini_engine
 from engines import analysis_engine
 from engines import astrological_evaluator  # if used
@@ -2017,6 +2020,13 @@ from utils import db_utils  # if db_utils is in utils/
 from services.matching_pipeline import select_template_with_fallbacks
 from services.provenance import record_provenance_from_match
 
+# --- Task 7: Resolver integration (flag-guarded) ---
+from services.feature_resolver import FeatureResolver
+from services.feature_ids import FeatureID
+
+def _feature_resolver_enabled():
+    # Read env at call time so you can toggle in the shell and get it instantly
+    return os.getenv("FEATURE_RESOLVER_ENABLED", "0") == "1"
 
 
 # --- Dynamic Weights Loading ---
@@ -2176,12 +2186,46 @@ def _fetch_and_format_insights(finding, language):
                     insights_list.append(interpretation_data)
     return insights_list
 
+def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
+    if not _feature_resolver_enabled():
+        return user_chart
+
+    try:
+        row = SimpleNamespace(
+            chart_json=user_chart,
+            birth_data=user_chart.get("birth_data"),
+            feature_presence_bits=None,
+            chart_version_hash=None,
+        )
+        res = FeatureResolver(row)
+        vals = res.get_features([FeatureID.ASC_LONGITUDE, FeatureID.ASC_SIGN])
+
+        asc = user_chart.setdefault("ascendant", {})
+        asc_lon = vals.get(FeatureID.ASC_LONGITUDE)
+        if asc_lon is not None and asc.get("longitude") is None:
+            asc["longitude"] = asc_lon
+
+        asc_sign = vals.get(FeatureID.ASC_SIGN)
+        if asc_sign is not None and asc.get("sign") is None:
+            asc["sign"] = asc_sign
+
+        # No DB commit here; opportunistic enrichment only
+    except Exception as e:
+        print(f"[Resolver] Enrichment skipped due to: {e}")
+
+    return user_chart
+
+
+
 # --- Analytical Brief Compiler ---
 def compile_analytical_brief(user_chart, trigger_context, related_charts=None):
     """
     Orchestrates the entire analysis, filters findings, fetches insights,
     and assembles the final structured Analytical Brief for the LLM.
     """
+    # Task 7: opportunistically ensure ascendant.longitude via resolver (flag-guarded)
+    user_chart = _maybe_enrich_chart_with_resolver(user_chart)
+
     # Assume transit_positions and ashtakavarga_scores are directly available or fetched here
     # For now, fetch transit_positions dynamically as it's time-dependent
     transit_positions = rohini_engine.get_transit_positions(datetime.now())
