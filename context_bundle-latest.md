@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-21 16:54:59Z UTC**
-- Commit: `da0e267e78f1f0f7dbeeff508126356eb888d4b7`
+- Generated: **2025-08-21 17:00:18Z UTC**
+- Commit: `dc0bb6bc40af9dba2f73729607237162a10312f6`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -2216,10 +2216,6 @@ def _resolve_and_persist_features_for_row(chart_row, feature_ids):
 
 
 def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
-    """
-    If resolver is enabled, opportunistically ensure ascendant.longitude and ascendant.sign
-    exist in the in-memory user_chart dict. No DB writes happen here.
-    """
     if not _feature_resolver_enabled():
         return user_chart
 
@@ -2231,18 +2227,44 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
             chart_version_hash=None,
         )
         res = FeatureResolver(row)
-        vals = res.get_features([FeatureID.ASC_LONGITUDE, FeatureID.ASC_SIGN])
+        vals = res.get_features([
+            FeatureID.ASC_LONGITUDE, FeatureID.ASC_SIGN,
+            FeatureID.SUN_LONGITUDE, FeatureID.SUN_SIGN,
+            FeatureID.MOON_LONGITUDE, FeatureID.MOON_SIGN,
+            FeatureID.MOON_NAKSHATRA, FeatureID.MOON_PADA,
+            FeatureID.SHADBALA_SUN_TOTAL, FeatureID.SHADBALA_MOON_TOTAL,
+        ])
 
+        # Asc
         asc = user_chart.setdefault("ascendant", {})
-        asc_lon = vals.get(FeatureID.ASC_LONGITUDE)
-        if asc_lon is not None and asc.get("longitude") is None:
-            asc["longitude"] = asc_lon
+        if vals.get(FeatureID.ASC_LONGITUDE) is not None and asc.get("longitude") is None:
+            asc["longitude"] = vals[FeatureID.ASC_LONGITUDE]
+        if vals.get(FeatureID.ASC_SIGN) is not None and asc.get("sign") is None:
+            asc["sign"] = vals[FeatureID.ASC_SIGN]
 
-        asc_sign = vals.get(FeatureID.ASC_SIGN)
-        if asc_sign is not None and asc.get("sign") is None:
-            asc["sign"] = asc_sign
+        # Sun
+        sun = user_chart.setdefault("planets", {}).setdefault("sun", {})
+        if vals.get(FeatureID.SUN_LONGITUDE) is not None and sun.get("longitude") is None:
+            sun["longitude"] = vals[FeatureID.SUN_LONGITUDE]
+        if vals.get(FeatureID.SUN_SIGN) is not None and sun.get("sign") is None:
+            sun["sign"] = vals[FeatureID.SUN_SIGN]
+        if vals.get(FeatureID.SHADBALA_SUN_TOTAL) is not None:
+            sun.setdefault("shadbala", {})["total"] = vals[FeatureID.SHADBALA_SUN_TOTAL]
 
-        # No DB commit here; opportunistic enrichment only
+        # Moon
+        moon = user_chart.setdefault("planets", {}).setdefault("moon", {})
+        if vals.get(FeatureID.MOON_LONGITUDE) is not None and moon.get("longitude") is None:
+            moon["longitude"] = vals[FeatureID.MOON_LONGITUDE]
+        if vals.get(FeatureID.MOON_SIGN) is not None and moon.get("sign") is None:
+            moon["sign"] = vals[FeatureID.MOON_SIGN]
+        if vals.get(FeatureID.MOON_NAKSHATRA) is not None and moon.get("nakshatra") is None:
+            moon["nakshatra"] = vals[FeatureID.MOON_NAKSHATRA]
+        if vals.get(FeatureID.MOON_PADA) is not None and moon.get("pada") is None:
+            moon["pada"] = vals[FeatureID.MOON_PADA]
+        if vals.get(FeatureID.SHADBALA_MOON_TOTAL) is not None:
+            moon.setdefault("shadbala", {})["total"] = vals[FeatureID.SHADBALA_MOON_TOTAL]
+
+        # Note: no DB commit here (this helper is purely in-memory)
     except Exception as e:
         print(f"[Resolver] Enrichment skipped due to: {e}")
 
