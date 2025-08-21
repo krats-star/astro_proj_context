@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-21 14:42:48Z UTC**
-- Commit: `d18b4cdf0d8338601b847e6f586bb39322cc94cf`
+- Generated: **2025-08-21 14:54:12Z UTC**
+- Commit: `c9cf4daf90d3926b8efe93f659d8f0bcee90d6e2`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -309,7 +309,9 @@ class UserChart(db.Model):
     birth_data = db.Column(JSONB, nullable=False)
     chart_json = db.Column(JSONB, nullable=False)
 
-    # NOTE: Do not add extra non-nullable fields unless you also add them to the DB via migrations.
+    # Task 7: presence bitset + registry/config version fingerprint
+    chart_version_hash = db.Column(db.String(128), nullable=True)
+    feature_presence_bits = db.Column(db.LargeBinary(), nullable=True)
 
     def __repr__(self):
         return f"<UserChart {self.id} for User {self.user_id}>"
