@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-21 17:00:18Z UTC**
-- Commit: `dc0bb6bc40af9dba2f73729607237162a10312f6`
+- Generated: **2025-08-21 17:16:53Z UTC**
+- Commit: `259a60683cc4f4b0c6f932ae1ab4f1a1598c7c94`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -2023,6 +2023,8 @@ from services.provenance import record_provenance_from_match
 # --- Task 7: Resolver integration (flag-guarded) ---
 from services.feature_resolver import FeatureResolver
 from services.feature_ids import FeatureID
+from models import UserChart, db
+
 
 def _feature_resolver_enabled():
     # Read env at call time so you can toggle in the shell and get it instantly
@@ -2031,6 +2033,68 @@ def _feature_resolver_enabled():
 def _feature_resolver_persist_enabled():
     # Separate flag for DB persistence; off by default
     return os.getenv("FEATURE_RESOLVER_PERSIST", "0") == "1"
+
+
+def heal_chart_features_by_id(chart_id: int, feature_ids=None) -> dict:
+    """
+    Loads a UserChart row by id, resolves a small batch of foundational
+    features via the Task 7 resolver, and persists them in one commit
+    (presence bits + version hash + chart_json) if flags are enabled.
+    Returns a summary dict.
+    """
+    if feature_ids is None:
+        feature_ids = [
+            FeatureID.ASC_LONGITUDE, FeatureID.ASC_SIGN,
+            FeatureID.SUN_LONGITUDE, FeatureID.SUN_SIGN,
+            FeatureID.MOON_LONGITUDE, FeatureID.MOON_SIGN,
+            FeatureID.MOON_NAKSHATRA, FeatureID.MOON_PADA,
+            FeatureID.SHADBALA_SUN_TOTAL, FeatureID.SHADBALA_MOON_TOTAL,
+        ]
+
+    if not _feature_resolver_enabled():
+        return {"ok": False, "reason": "FEATURE_RESOLVER_ENABLED=0", "chart_id": chart_id}
+
+    # Use Flask-SQLAlchemy session directly
+    row = db.session.get(UserChart, chart_id)
+    if row is None:
+        return {"ok": False, "reason": f"UserChart {chart_id} not found", "chart_id": chart_id}
+
+    before = {
+        "has_bits": row.feature_presence_bits is not None,
+        "hash": row.chart_version_hash,
+    }
+
+    # Resolve + apply mutations to the row (no commit inside)
+    _resolve_and_persist_features_for_row(row, feature_ids)
+
+    # Commit once if persistence is enabled and changes were made
+    if _feature_resolver_persist_enabled():
+        try:
+            db.session.add(row)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            return {"ok": False, "reason": f"commit_failed: {e}", "chart_id": chart_id}
+
+    after = {
+        "has_bits": row.feature_presence_bits is not None,
+        "hash": row.chart_version_hash,
+    }
+
+    asc = (row.chart_json or {}).get("ascendant", {})
+    sun = (row.chart_json or {}).get("planets", {}).get("sun", {})
+    moon = (row.chart_json or {}).get("planets", {}).get("moon", {})
+    return {
+        "ok": True,
+        "chart_id": chart_id,
+        "persist_enabled": _feature_resolver_persist_enabled(),
+        "before": before,
+        "after": after,
+        "ascendant": {"longitude": asc.get("longitude"), "sign": asc.get("sign")},
+        "sun": {"longitude": sun.get("longitude"), "sign": sun.get("sign"), "shadbala_total": (sun.get("shadbala") or {}).get("total")},
+        "moon": {"longitude": moon.get("longitude"), "sign": moon.get("sign"), "nakshatra": moon.get("nakshatra"), "pada": moon.get("pada"), "shadbala_total": (moon.get("shadbala") or {}).get("total")},
+    }
+
 
 
 # --- Dynamic Weights Loading ---
@@ -2193,23 +2257,16 @@ def _fetch_and_format_insights(finding, language):
 def _resolve_and_persist_features_for_row(chart_row, feature_ids):
     """
     Uses the Task 7 resolver on a real ORM row (UserChart), applies in-memory
-    mutations (chart_json, presence bits, version hash), and if the persistence
-    flag is on, commits once. Safe to call multiple times; commits only if dirty.
+    mutations (chart_json, presence bits, version hash). This helper DOES NOT
+    commit; the caller (e.g., heal_chart_features_by_id) is responsible for committing.
     """
     if not _feature_resolver_enabled():
         return None  # feature resolver globally disabled
 
-    # Resolve & apply to row (no commit yet)
+    # Resolve & apply to row (no commit here)
     resolver = FeatureResolver(chart_row)
     _ = resolver.get_features(feature_ids)
     resolver.apply_to_row()
-
-    # Persist if enabled and dirty
-    if _feature_resolver_persist_enabled() and resolver.dirty:
-        # Uses your existing db_utils context manager
-        with db_utils.db_session() as s:
-            s.add(chart_row)
-            s.commit()
 
     # Return the (possibly) updated chart dict
     return chart_row.chart_json
