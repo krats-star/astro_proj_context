@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-21 01:18:38Z UTC**
-- Commit: `a5d76f5502fad8e0a4c8cee56670b00bee15fa3f`
+- Generated: **2025-08-21 09:12:14Z UTC**
+- Commit: `2ae100a23b549193a45b762dec8d3f689f71703f`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -218,6 +218,9 @@ from datetime import datetime, timezone
 from extensions import db
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy.sql import func
+from dotenv import load_dotenv
+load_dotenv()
+
 
 
 class User(db.Model):
@@ -422,6 +425,7 @@ class BriefTemplate(db.Model):
     __tablename__ = 'brief_templates'
 
     id = db.Column(db.String, primary_key=True)  # e.g. MUHURTA_BUSINESS_START_V1
+    title = db.Column(db.String, nullable=True)  # ✅ NEW: Add title
     category = db.Column(db.String, nullable=False)  # e.g. muhurta.business_start
     intents = db.Column(JSONB, nullable=False)  # e.g. ["muhurta_query"]
     time_windows = db.Column(JSONB, nullable=False)  # e.g. ["next_7_days"]
@@ -450,6 +454,21 @@ class BriefProvenanceLog(db.Model):
     inputs_hash = db.Column(db.String, nullable=True)
     trigger = db.Column(db.String, nullable=True)       # 'user_query', 'scheduled', etc.
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+# For standalone scripts like seeders
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine
+import os
+from sqlalchemy.engine.url import make_url
+
+database_url = os.getenv("DATABASE_URL")
+if not database_url:
+    raise ValueError("DATABASE_URL not found in environment")
+    
+engine = create_engine(make_url(database_url))
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+db_session = SessionLocal()
+
 
 ```
 
