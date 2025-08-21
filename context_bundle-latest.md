@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-21 16:34:12Z UTC**
-- Commit: `0db93a8223926b4d1aa26b8a1c2e7deed919b865`
+- Generated: **2025-08-21 16:54:59Z UTC**
+- Commit: `da0e267e78f1f0f7dbeeff508126356eb888d4b7`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -2028,6 +2028,10 @@ def _feature_resolver_enabled():
     # Read env at call time so you can toggle in the shell and get it instantly
     return os.getenv("FEATURE_RESOLVER_ENABLED", "0") == "1"
 
+def _feature_resolver_persist_enabled():
+    # Separate flag for DB persistence; off by default
+    return os.getenv("FEATURE_RESOLVER_PERSIST", "0") == "1"
+
 
 # --- Dynamic Weights Loading ---
 _dynamic_weights = {} # Module-level variable to store loaded weights
@@ -2186,7 +2190,36 @@ def _fetch_and_format_insights(finding, language):
                     insights_list.append(interpretation_data)
     return insights_list
 
+def _resolve_and_persist_features_for_row(chart_row, feature_ids):
+    """
+    Uses the Task 7 resolver on a real ORM row (UserChart), applies in-memory
+    mutations (chart_json, presence bits, version hash), and if the persistence
+    flag is on, commits once. Safe to call multiple times; commits only if dirty.
+    """
+    if not _feature_resolver_enabled():
+        return None  # feature resolver globally disabled
+
+    # Resolve & apply to row (no commit yet)
+    resolver = FeatureResolver(chart_row)
+    _ = resolver.get_features(feature_ids)
+    resolver.apply_to_row()
+
+    # Persist if enabled and dirty
+    if _feature_resolver_persist_enabled() and resolver.dirty:
+        # Uses your existing db_utils context manager
+        with db_utils.db_session() as s:
+            s.add(chart_row)
+            s.commit()
+
+    # Return the (possibly) updated chart dict
+    return chart_row.chart_json
+
+
 def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
+    """
+    If resolver is enabled, opportunistically ensure ascendant.longitude and ascendant.sign
+    exist in the in-memory user_chart dict. No DB writes happen here.
+    """
     if not _feature_resolver_enabled():
         return user_chart
 
@@ -2218,6 +2251,31 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
 
 
 # --- Analytical Brief Compiler ---
+
+def compile_analytical_brief_from_row(chart_row, trigger_context, related_charts=None):
+    """
+    Convenience wrapper: accept a UserChart ORM row, resolve a small, foundational
+    feature batch (ascendant longitude & sign) with the Task 7 resolver, optionally
+    persist the updates (presence bits + version hash + chart_json), then call the
+    existing compile_analytical_brief with the (possibly) updated chart dict.
+    Behavior is fully flag-guarded; with flags off, this is effectively a pass-through.
+    """
+    # Minimal safe batch for now — expand later as we adopt more features
+    feature_batch = [FeatureID.ASC_LONGITUDE, FeatureID.ASC_SIGN]
+
+    # If resolver is disabled, simply pass the current chart dict through
+    if not _feature_resolver_enabled():
+        chart_dict = chart_row.chart_json or {}
+        return compile_analytical_brief(chart_dict, trigger_context, related_charts)
+
+    # Use the resolver and apply in-memory changes to the row
+    _resolve_and_persist_features_for_row(chart_row, feature_batch)
+
+    # Use the (possibly) updated chart dict; if nothing changed, it’s the same object
+    chart_dict = chart_row.chart_json or {}
+    return compile_analytical_brief(chart_dict, trigger_context, related_charts)
+
+
 def compile_analytical_brief(user_chart, trigger_context, related_charts=None):
     """
     Orchestrates the entire analysis, filters findings, fetches insights,
