@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-22 02:57:49Z UTC**
-- Commit: `5895df0156a8dfc3a9aa077c750ef5ee93d294d4`
+- Generated: **2025-08-22 03:02:15Z UTC**
+- Commit: `2fc74b3e1aeefff7145d46133b57fd8ce3776f93`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -1176,8 +1176,8 @@ def identify_all_yogas(user_chart):
                 })
 
     # Gajakesari (Moon-Jupiter Kendra)
-    moon_house = user_chart['planets']['moon']['house']
-    jup_house = user_chart['planets']['jupiter']['house']
+    moon_house = user_chart['planets'].get('moon', {}).get('house')
+    jup_house = user_chart['planets'].get('jupiter', {}).get('house')
     if jup_house in [(moon_house + i - 1) % 12 + 1 for i in [1, 4, 7, 10]]:
         yogas_found.append({
             "type": "yoga",
