@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-22 01:32:14Z UTC**
-- Commit: `3383c5136955d598bc0cba7658396e3d4f2810a7`
+- Generated: **2025-08-22 01:57:35Z UTC**
+- Commit: `48ef10c5658fbe6a328fdec150ef009139e31158`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -2048,11 +2048,27 @@ def heal_chart_features_by_id(chart_id: int, feature_ids=None) -> dict:
     """
     if feature_ids is None:
         feature_ids = [
+            # Asc
             FeatureID.ASC_LONGITUDE, FeatureID.ASC_SIGN,
+
+            # Sun & Moon core
             FeatureID.SUN_LONGITUDE, FeatureID.SUN_SIGN,
             FeatureID.MOON_LONGITUDE, FeatureID.MOON_SIGN,
             FeatureID.MOON_NAKSHATRA, FeatureID.MOON_PADA,
+
+            # Shadbala totals
             FeatureID.SHADBALA_SUN_TOTAL, FeatureID.SHADBALA_MOON_TOTAL,
+
+            # Mars → Saturn
+            FeatureID.MARS_LONGITUDE, FeatureID.MARS_SIGN,
+            FeatureID.MERCURY_LONGITUDE, FeatureID.MERCURY_SIGN,
+            FeatureID.JUPITER_LONGITUDE, FeatureID.JUPITER_SIGN,
+            FeatureID.VENUS_LONGITUDE, FeatureID.VENUS_SIGN,
+            FeatureID.SATURN_LONGITUDE, FeatureID.SATURN_SIGN,
+
+            # Rahu/Ketu
+            FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN,
+            FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN,
         ]
 
     if not _feature_resolver_enabled():
@@ -2063,15 +2079,12 @@ def heal_chart_features_by_id(chart_id: int, feature_ids=None) -> dict:
     if row is None:
         return {"ok": False, "reason": f"UserChart {chart_id} not found", "chart_id": chart_id}
 
-    before = {
-        "has_bits": row.feature_presence_bits is not None,
-        "hash": row.chart_version_hash,
-    }
+    before = {"has_bits": row.feature_presence_bits is not None, "hash": row.chart_version_hash}
 
-    # Resolve + apply mutations to the row (no commit inside)
+    # Resolve + apply mutations (no commit inside)
     metrics = _resolve_and_persist_features_for_row(row, feature_ids)
 
-#     Commit once if persistence is enabled
+    # Commit once if persistence is enabled
     if _feature_resolver_persist_enabled():
         try:
             db.session.add(row)
@@ -2080,15 +2093,14 @@ def heal_chart_features_by_id(chart_id: int, feature_ids=None) -> dict:
             db.session.rollback()
             return {"ok": False, "reason": f"commit_failed: {e}", "chart_id": chart_id}
 
-
-    after = {
-        "has_bits": row.feature_presence_bits is not None,
-        "hash": row.chart_version_hash,
-    }
+    after = {"has_bits": row.feature_presence_bits is not None, "hash": row.chart_version_hash}
 
     asc = (row.chart_json or {}).get("ascendant", {})
     sun = (row.chart_json or {}).get("planets", {}).get("sun", {})
     moon = (row.chart_json or {}).get("planets", {}).get("moon", {})
+    rahu = (row.chart_json or {}).get("planets", {}).get("rahu", {})
+    ketu = (row.chart_json or {}).get("planets", {}).get("ketu", {})
+
     return {
         "ok": True,
         "chart_id": chart_id,
@@ -2099,6 +2111,8 @@ def heal_chart_features_by_id(chart_id: int, feature_ids=None) -> dict:
         "ascendant": {"longitude": asc.get("longitude"), "sign": asc.get("sign")},
         "sun": {"longitude": sun.get("longitude"), "sign": sun.get("sign"), "shadbala_total": (sun.get("shadbala") or {}).get("total")},
         "moon": {"longitude": moon.get("longitude"), "sign": moon.get("sign"), "nakshatra": moon.get("nakshatra"), "pada": moon.get("pada"), "shadbala_total": (moon.get("shadbala") or {}).get("total")},
+        "rahu": {"longitude": rahu.get("longitude"), "sign": rahu.get("sign")},
+        "ketu": {"longitude": ketu.get("longitude"), "sign": ketu.get("sign")},
     }
 
 
@@ -2316,6 +2330,8 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
             FeatureID.JUPITER_LONGITUDE, FeatureID.JUPITER_SIGN,
             FeatureID.VENUS_LONGITUDE, FeatureID.VENUS_SIGN,
             FeatureID.SATURN_LONGITUDE, FeatureID.SATURN_SIGN,
+            FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN,
+            FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN,
         ])
 
         # Asc
@@ -2382,6 +2398,19 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
         if vals.get(FeatureID.SATURN_SIGN) is not None and saturn.get("sign") is None:
             saturn["sign"] = vals[FeatureID.SATURN_SIGN]
 
+        # Rahu
+        rahu = user_chart.setdefault("planets", {}).setdefault("rahu", {})
+        if vals.get(FeatureID.RAHU_LONGITUDE) is not None and rahu.get("longitude") is None:
+            rahu["longitude"] = vals[FeatureID.RAHU_LONGITUDE]
+        if vals.get(FeatureID.RAHU_SIGN) is not None and rahu.get("sign") is None:
+            rahu["sign"] = vals[FeatureID.RAHU_SIGN]
+
+        # Ketu
+        ketu = user_chart.setdefault("planets", {}).setdefault("ketu", {})
+        if vals.get(FeatureID.KETU_LONGITUDE) is not None and ketu.get("longitude") is None:
+            ketu["longitude"] = vals[FeatureID.KETU_LONGITUDE]
+        if vals.get(FeatureID.KETU_SIGN) is not None and ketu.get("sign") is None:
+            ketu["sign"] = vals[FeatureID.KETU_SIGN]
 
         # Note: no DB commit here (this helper is purely in-memory)
     except Exception as e:
