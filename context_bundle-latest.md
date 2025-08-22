@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-22 09:10:04Z UTC**
-- Commit: `10890447339a7a47ca9cf5e055147565cdd10dab`
+- Generated: **2025-08-22 09:30:08Z UTC**
+- Commit: `1908b566eb8826f7d9ca8d88c279917d3ecf55c9`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -2335,6 +2335,20 @@ def heal_chart_features_by_id(chart_id: int, feature_ids=None) -> dict:
             FeatureID.MERCURY_COMBUST, FeatureID.VENUS_COMBUST, FeatureID.MARS_COMBUST,
             FeatureID.JUPITER_COMBUST, FeatureID.SATURN_COMBUST,
 
+            # Bundle R3: Nakshatra/Pada for non-Moon planets
+            FeatureID.SUN_NAKSHATRA, FeatureID.SUN_PADA,
+            FeatureID.MARS_NAKSHATRA, FeatureID.MARS_PADA,
+            FeatureID.MERCURY_NAKSHATRA, FeatureID.MERCURY_PADA,
+            FeatureID.JUPITER_NAKSHATRA, FeatureID.JUPITER_PADA,
+            FeatureID.VENUS_NAKSHATRA, FeatureID.VENUS_PADA,
+            FeatureID.SATURN_NAKSHATRA, FeatureID.SATURN_PADA,
+
+            # Bundle R3: Sarvashtakavarga 12 bins
+            FeatureID.SAV_ARIES, FeatureID.SAV_TAURUS, FeatureID.SAV_GEMINI,
+            FeatureID.SAV_CANCER, FeatureID.SAV_LEO, FeatureID.SAV_VIRGO,
+            FeatureID.SAV_LIBRA, FeatureID.SAV_SCORPIO, FeatureID.SAV_SAGITTARIUS,
+            FeatureID.SAV_CAPRICORN, FeatureID.SAV_AQUARIUS, FeatureID.SAV_PISCES,
+
         ]
 
     if not _feature_resolver_enabled():
@@ -2627,6 +2641,21 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
             FeatureID.MERCURY_COMBUST, FeatureID.VENUS_COMBUST, FeatureID.MARS_COMBUST,
             FeatureID.JUPITER_COMBUST, FeatureID.SATURN_COMBUST,
 
+            # Bundle R3: Nakshatra/Pada for non-Moon planets
+            FeatureID.SUN_NAKSHATRA, FeatureID.SUN_PADA,
+            FeatureID.MARS_NAKSHATRA, FeatureID.MARS_PADA,
+            FeatureID.MERCURY_NAKSHATRA, FeatureID.MERCURY_PADA,
+            FeatureID.JUPITER_NAKSHATRA, FeatureID.JUPITER_PADA,
+            FeatureID.VENUS_NAKSHATRA, FeatureID.VENUS_PADA,
+            FeatureID.SATURN_NAKSHATRA, FeatureID.SATURN_PADA,
+
+            # Bundle R3: Sarvashtakavarga 12 bins
+            FeatureID.SAV_ARIES, FeatureID.SAV_TAURUS, FeatureID.SAV_GEMINI,
+            FeatureID.SAV_CANCER, FeatureID.SAV_LEO, FeatureID.SAV_VIRGO,
+            FeatureID.SAV_LIBRA, FeatureID.SAV_SCORPIO, FeatureID.SAV_SAGITTARIUS,
+            FeatureID.SAV_CAPRICORN, FeatureID.SAV_AQUARIUS, FeatureID.SAV_PISCES,
+
+
             # Node houses (from earlier bundle)
             FeatureID.RAHU_HOUSE, FeatureID.KETU_HOUSE,
         ])
@@ -2685,10 +2714,6 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
         if ketu.get("house") is None and vals.get(FeatureID.KETU_HOUSE) is not None:
             ketu["house"] = vals[FeatureID.KETU_HOUSE]
 
-        # Nodes (house yes, dignity no)
-        _put_planet("rahu", FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN)
-        _put_planet("ketu", FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN)
-
         # --- D9 (Navamsa) sign: write if missing ------------------------------------
         sun = planets.setdefault("sun", {})
         if sun.get("d9_sign") is None and vals.get(FeatureID.SUN_D9_SIGN) is not None:
@@ -2741,15 +2766,6 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
             if node.get("d7_sign") is None and vals.get(fid) is not None:
                 node["d7_sign"] = vals[fid]
 
-        # Houses for nodes
-        rahu = planets.setdefault("rahu", {})
-        if rahu.get("house") is None and vals.get(FeatureID.RAHU_HOUSE) is not None:
-            rahu["house"] = vals[FeatureID.RAHU_HOUSE]
-
-        ketu = planets.setdefault("ketu", {})
-        if ketu.get("house") is None and vals.get(FeatureID.KETU_HOUSE) is not None:
-            ketu["house"] = vals[FeatureID.KETU_HOUSE]
-
         # Retrograde flags for classical 5
         for pname, fid in [
             ("mercury", FeatureID.MERCURY_RETROGRADE),
@@ -2774,6 +2790,45 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
             node = planets.setdefault(pname, {})
             if node.get("combust") is None and vals.get(fid) is not None:
                 node["combust"] = bool(vals[fid])
+
+        # --- Bundle R3 writes: Nakshatra/Pada for non-Moon planets -----------
+        for pname, fid_nk, fid_pd in [
+            ("sun",     FeatureID.SUN_NAKSHATRA,     FeatureID.SUN_PADA),
+            ("mars",    FeatureID.MARS_NAKSHATRA,    FeatureID.MARS_PADA),
+            ("mercury", FeatureID.MERCURY_NAKSHATRA, FeatureID.MERCURY_PADA),
+            ("jupiter", FeatureID.JUPITER_NAKSHATRA, FeatureID.JUPITER_PADA),
+            ("venus",   FeatureID.VENUS_NAKSHATRA,   FeatureID.VENUS_PADA),
+            ("saturn",  FeatureID.SATURN_NAKSHATRA,  FeatureID.SATURN_PADA),
+        ]:
+            node = planets.setdefault(pname, {})
+            if node.get("nakshatra") is None and vals.get(fid_nk) is not None:
+                node["nakshatra"] = vals[fid_nk]
+            if node.get("pada") is None and vals.get(fid_pd) is not None:
+                node["pada"] = vals[fid_pd]
+
+        # --- Bundle R3 writes: Sarvashtakavarga 12 bins -----------------------
+        sav = user_chart.setdefault("ashtakavarga_scores", {}).setdefault("sarvashtakavarga", {})
+        sav_map = {
+            "aries":        FeatureID.SAV_ARIES,
+            "taurus":       FeatureID.SAV_TAURUS,
+            "gemini":       FeatureID.SAV_GEMINI,
+            "cancer":       FeatureID.SAV_CANCER,
+            "leo":          FeatureID.SAV_LEO,
+            "virgo":        FeatureID.SAV_VIRGO,
+            "libra":        FeatureID.SAV_LIBRA,
+            "scorpio":      FeatureID.SAV_SCORPIO,
+            "sagittarius":  FeatureID.SAV_SAGITTARIUS,
+            "capricorn":    FeatureID.SAV_CAPRICORN,
+            "aquarius":     FeatureID.SAV_AQUARIUS,
+            "pisces":       FeatureID.SAV_PISCES,
+        }
+        for sign_name, fid in sav_map.items():
+            if sav.get(sign_name) is None and vals.get(fid) is not None:
+                try:
+                    sav[sign_name] = int(vals[fid])
+                except Exception:
+                    pass
+
 
         # Note: no DB commit here (this helper is purely in-memory)
     except Exception as e:
@@ -2901,7 +2956,7 @@ def compile_analytical_brief(user_chart, trigger_context, related_charts=None):
             "dignity": planet_data.get('dignity'),
             "status": planet_data.get('status'),
             "shadbala_total": planet_data.get('shadbala', {}).get('total'),
-            "is_retrograde": planet_data.get('is_retrograde', False)
+            "is_retrograde": planet_data.get('retrograde', False)
         }
 
     # Extract current dasha/gochar from findings and populate current_dasha_gochar
