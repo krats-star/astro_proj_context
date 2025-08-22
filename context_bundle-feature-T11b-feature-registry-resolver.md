@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-22 09:52:43Z UTC**
-- Commit: `b28a90016678b37bb6adf47899d387412d4a40e4`
+- Generated: **2025-08-22 10:16:40Z UTC**
+- Commit: `8d3c18c4670516e4f50150af98361acc1035a4a1`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -2256,10 +2256,19 @@ from services.provenance import record_provenance_from_match
 # --- Task 7: Resolver integration (flag-guarded) ---
 from services.feature_resolver import FeatureResolver
 from services.feature_ids import FeatureID, MAX_FEATURE_ID
-from services.feature_registry import REGISTRY
+from services.feature_registry import REGISTRY, REGISTRY_HASH
 from services.bitset import Bitset
 from models import UserChart, db
 
+
+def _bits_has_all(bits_hex: str | None, feature_ids: list[int]) -> bool:
+    if not bits_hex:
+        return False
+    try:
+        bs = Bitset.from_hex(bits_hex)
+        return all(bs.has(fid) for fid in feature_ids)
+    except Exception:
+        return False
 
 
 def _feature_resolver_enabled():
