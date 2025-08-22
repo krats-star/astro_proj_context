@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-22 02:02:52Z UTC**
-- Commit: `abd097cef06788e6c26f0a7d46c842cfd720095e`
+- Generated: **2025-08-22 02:57:49Z UTC**
+- Commit: `5895df0156a8dfc3a9aa077c750ef5ee93d294d4`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -531,15 +531,172 @@ db_session = SessionLocal()
 # analysis_engine.py (core analysis module)
 
 import math
+import os
 from datetime import datetime
+from types import SimpleNamespace
+
 from engines import astrological_constants as ac
 from engines import astrological_evaluator as evaluator
 import db_utils  # Still needed if you fetch yoga rules from KB
 from engines import rohini_engine  # For transit positions if needed
 
+# --- Task 7: Resolver (flag-guarded) ---
+from services.feature_resolver import FeatureResolver
+from services.feature_ids import FeatureID
+
+
 # -------------------------------------------------------------------
 # Utils
 # -------------------------------------------------------------------
+
+# --- D9 (Navamsa) helper -----------------------------------------------------
+def _compute_d9_sign_from_longitude(lon: float) -> str | None:
+    """
+    Given a geocentric ecliptic longitude in degrees [0,360),
+    return the Navamsa (D9) sign as a string from ac.SIGNS.
+    Rule:
+      - Each sign (30°) is divided into 9 parts of 3°20' (= 3.333...°).
+      - Starting Navamsa differs by modality:
+          * Movable signs (Aries, Cancer, Libra, Capricorn): start from same sign
+          * Fixed   signs (Taurus, Leo, Scorpio, Aquarius): start from 9th from sign
+          * Dual    signs (Gemini, Virgo, Sagittarius, Pisces): start from 5th from sign
+    """
+    if lon is None:
+        return None
+    lon = lon % 360.0
+    sign_idx = int(lon // 30)               # 0..11
+    deg_in_sign = lon % 30.0
+    nav_idx = int(deg_in_sign // (30.0/9.0))  # 0..8
+
+    # modality offset
+    movable   = {0, 3, 6, 9}          # Aries, Cancer, Libra, Capricorn
+    fixed     = {1, 4, 7, 10}         # Taurus, Leo, Scorpio, Aquarius
+    dual      = {2, 5, 8, 11}         # Gemini, Virgo, Sagittarius, Pisces
+    if sign_idx in movable:
+        start = sign_idx
+    elif sign_idx in fixed:
+        start = (sign_idx + 8) % 12   # 9th from sign
+    else:  # dual
+        start = (sign_idx + 4) % 12   # 5th from sign
+
+    d9_idx = (start + nav_idx) % 12
+    return ac.SIGNS[d9_idx]
+
+
+# NEW: ensure houses & basics exist for all planets (whole-sign houses)
+def _ensure_houses_and_min_basics(user_chart):
+    # Whole-sign houses from Asc sign; compute minimal dignity/status fallbacks
+    asc_sign = user_chart.get("ascendant", {}).get("sign")
+    if not asc_sign:
+        return user_chart
+    try:
+        asc_idx = ac.SIGNS.index(asc_sign)
+    except ValueError:
+        return user_chart
+
+    planets = user_chart.setdefault("planets", {})
+    for name, pdata in planets.items():
+        sign = pdata.get("sign")
+
+        # House (whole-sign) if missing
+        if "house" not in pdata and sign in ac.SIGNS:
+            p_idx = ac.SIGNS.index(sign)
+            pdata["house"] = ((p_idx - asc_idx) % 12) + 1
+
+        # D9 (Navamsa) sign if missing and we have longitude
+        if "d9_sign" not in pdata and pdata.get("longitude") is not None:
+            d9 = _compute_d9_sign_from_longitude(pdata["longitude"])
+            if d9:
+                pdata["d9_sign"] = d9
+
+        # Dignity minimal fallback if missing (skip nodes)
+        if name not in ("rahu", "ketu") and "dignity" not in pdata and sign in ac.SIGNS:
+            try:
+                pdata["dignity"] = rohini_engine.get_planet_dignity(name, sign)
+            except Exception:
+                pdata["dignity"] = "Neutral Sign"
+
+        # Status fallback so downstream string tests don't crash
+        pdata.setdefault("status", "")
+
+    return user_chart
+
+
+def _resolver_enabled():
+    # Lazy read, so you can toggle per shell
+    return os.getenv("FEATURE_RESOLVER_ENABLED", "0") == "1"
+
+def _analysis_enrich_with_resolver(user_chart: dict) -> dict:
+    """
+    Opportunistically ensure core features exist in user_chart using the Task 7 resolver.
+    Purely in-memory. No DB writes here.
+    """
+    if not _resolver_enabled():
+        return user_chart
+
+    try:
+        row = SimpleNamespace(
+            chart_json=user_chart,
+            birth_data=user_chart.get("birth_data"),
+            feature_presence_bits=None,
+            chart_version_hash=None,
+        )
+        res = FeatureResolver(row)
+        vals = res.get_features([
+            # Asc
+            FeatureID.ASC_LONGITUDE, FeatureID.ASC_SIGN,
+            # Sun & Moon essentials
+            FeatureID.SUN_LONGITUDE, FeatureID.SUN_SIGN,
+            FeatureID.MOON_LONGITUDE, FeatureID.MOON_SIGN,
+            FeatureID.MOON_NAKSHATRA, FeatureID.MOON_PADA,
+            # Mars → Saturn
+            FeatureID.MARS_LONGITUDE, FeatureID.MARS_SIGN,
+            FeatureID.MERCURY_LONGITUDE, FeatureID.MERCURY_SIGN,
+            FeatureID.JUPITER_LONGITUDE, FeatureID.JUPITER_SIGN,
+            FeatureID.VENUS_LONGITUDE, FeatureID.VENUS_SIGN,
+            FeatureID.SATURN_LONGITUDE, FeatureID.SATURN_SIGN,
+            # Rahu/Ketu
+            FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN,
+            FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN,
+        ])
+
+        # Populate the chart only where missing
+        asc = user_chart.setdefault("ascendant", {})
+        if asc.get("longitude") is None and vals.get(FeatureID.ASC_LONGITUDE) is not None:
+            asc["longitude"] = vals[FeatureID.ASC_LONGITUDE]
+        if asc.get("sign") is None and vals.get(FeatureID.ASC_SIGN) is not None:
+            asc["sign"] = vals[FeatureID.ASC_SIGN]
+
+        planets = user_chart.setdefault("planets", {})
+        def _put(pname, fid_lon, fid_sign):
+            node = planets.setdefault(pname, {})
+            if node.get("longitude") is None and vals.get(fid_lon) is not None:
+                node["longitude"] = vals[fid_lon]
+            if node.get("sign") is None and vals.get(fid_sign) is not None:
+                node["sign"] = vals[fid_sign]
+
+        _put("sun",     FeatureID.SUN_LONGITUDE,     FeatureID.SUN_SIGN)
+        _put("moon",    FeatureID.MOON_LONGITUDE,    FeatureID.MOON_SIGN)
+        _put("mars",    FeatureID.MARS_LONGITUDE,    FeatureID.MARS_SIGN)
+        _put("mercury", FeatureID.MERCURY_LONGITUDE, FeatureID.MERCURY_SIGN)
+        _put("jupiter", FeatureID.JUPITER_LONGITUDE, FeatureID.JUPITER_SIGN)
+        _put("venus",   FeatureID.VENUS_LONGITUDE,   FeatureID.VENUS_SIGN)
+        _put("saturn",  FeatureID.SATURN_LONGITUDE,  FeatureID.SATURN_SIGN)
+        _put("rahu",    FeatureID.RAHU_LONGITUDE,    FeatureID.RAHU_SIGN)
+        _put("ketu",    FeatureID.KETU_LONGITUDE,    FeatureID.KETU_SIGN)
+
+        # Moon extras (nakshatra/pada)
+        moon = planets.setdefault("moon", {})
+        if moon.get("nakshatra") is None and vals.get(FeatureID.MOON_NAKSHATRA) is not None:
+            moon["nakshatra"] = vals[FeatureID.MOON_NAKSHATRA]
+        if moon.get("pada") is None and vals.get(FeatureID.MOON_PADA) is not None:
+            moon["pada"] = vals[FeatureID.MOON_PADA]
+
+    except Exception as e:
+        print(f"[Resolver][analysis] enrichment skipped: {e}")
+
+    return user_chart
+
 
 # Safe date parse
 def _safe_parse_date(s: str):
@@ -602,55 +759,101 @@ def get_avakahada_chakra(natal_chart):
 def get_planet_avasthas(planet_name, natal_chart):
     """
     Baladi & Deeptadi Avasthas for a planet.
+    Tolerant to missing 'sign' / 'dignity' by computing from longitude/sign.
     """
     if planet_name in ["rahu", "ketu"]:
         return {"baladi": "n/a", "deeptadi": "n/a"}
+
     p = natal_chart['planets'][planet_name]
-    sign_type = "odd" if (ac.SIGNS.index(p['sign']) + 1) % 2 != 0 else "even"
-    degree_in_sign = p['longitude'] % 30
-    baladi = next((state for state, start, end in ac.BALADI_AVASTHA_RANGES[sign_type] if start <= degree_in_sign < end), "unknown")
+
+    # Ensure we have sign; derive from longitude if missing
+    sign = p.get("sign")
+    if not sign and p.get("longitude") is not None:
+        sign = ac.SIGNS[int((p["longitude"] % 360) // 30)]
+
+    # Pick odd/even safely
+    if sign in ac.SIGNS:
+        sign_type = "odd" if ((ac.SIGNS.index(sign) + 1) % 2 != 0) else "even"
+    else:
+        sign_type = "odd"  # harmless fallback
+
+    # Degree within sign (0–30) if we have longitude
+    deg = p.get("longitude")
+    degree_in_sign = (deg % 30) if deg is not None else 0.0
+
+    # Baladi avastha from degree and sign parity
+    baladi = next(
+        (state for state, start, end in ac.BALADI_AVASTHA_RANGES[sign_type] if start <= degree_in_sign < end),
+        "unknown",
+    )
+
+    # Deeptadi: compute dignity on the fly if missing
     deeptadi_map = {
         "Exaltation": "deepta",
         "Own Sign": "svastha",
         "Friendly Sign": "pramudita",
         "Neutral Sign": "shanta",
         "Enemy Sign": "duhkhita",
+        "Debilitation": "duhkhita",
     }
-    deeptadi = deeptadi_map.get(p['dignity'], "unknown")
+    dign = p.get("dignity")
+    if not dign and sign:
+        # use the engine’s dignity function (lowercase planet name expected)
+        try:
+            dign = rohini_engine.get_planet_dignity(planet_name.lower(), sign)
+        except Exception:
+            dign = "Neutral Sign"
+
+    deeptadi = deeptadi_map.get(dign or "Neutral Sign", "shanta")
     return {"baladi": baladi, "deeptadi": deeptadi}
 
 def get_lajjitaadi_avasthas(planet_name, kundli):
     """
     Lajjitaadi Avasthas via conjunctions/dignity.
+    Robust to missing 'dignity' in the input.
     """
     if planet_name in ["rahu", "ketu"]:
         return "n/a"
 
     p = kundli['planets'][planet_name]
-    house = p['house']
+    house = p.get('house')
 
-    # Garvita (Proud)
-    if p['dignity'] in ["Exaltation", "Moolatrikona"]:
+    # Ensure dignity; compute if absent
+    dign = p.get("dignity")
+    if not dign:
+        sign = p.get("sign")
+        if not sign and p.get("longitude") is not None:
+            sign = ac.SIGNS[int((p["longitude"] % 360) // 30)]
+        if sign:
+            try:
+                dign = rohini_engine.get_planet_dignity(planet_name.lower(), sign)
+            except Exception:
+                dign = "Neutral Sign"
+        else:
+            dign = "Neutral Sign"
+
+    # Garvita (exalted or own sign)
+    if dign in ["Exaltation", "Own Sign"]:
         return "garvita"
 
-    others = [n for n, d in kundli['planets'].items() if d['house'] == house and n != planet_name]
+    others = [n for n, d in kundli.get('planets', {}).items() if d.get('house') == house and n != planet_name]
 
     # Lajjita (5th + malefic present)
     if house == 5 and any(q in ["sun", "saturn", "mars", "rahu", "ketu"] for q in others):
         return "lajjita"
 
     # Mudita (with Jupiter or Friendly Sign)
-    if 'jupiter' in others or p['dignity'] == "Friendly Sign":
+    if 'jupiter' in others or dign == "Friendly Sign":
         return "mudita"
 
     # Kshobhita (with Sun and malefic aspect)
     if 'sun' in others:
-        aspects = evaluator.get_aspects_on_house(house, kundli)
-        if any(q in aspects for q in ["saturn", "mars", "rahu"]):
+        aspects = evaluator.get_aspects(kundli, planet_name) if hasattr(evaluator, "get_aspects") else []
+        if any(a.get("type") == "malefic" for a in aspects):
             return "kshobhita"
 
     # Kshudhita (with Saturn or Enemy Sign)
-    if 'saturn' in others or p['dignity'] == "Enemy Sign":
+    if 'saturn' in others or dign == "Enemy Sign":
         return "kshudhita"
 
     return "shanta"
@@ -661,60 +864,62 @@ def get_lajjitaadi_avasthas(planet_name, kundli):
 
 
 def get_all_planetary_data(user_chart):
+    """
+    Builds per-planet packets used across analysis. Tolerant to missing fields.
+    """
     planetary_findings = []
 
-    for pname in user_chart["planets"]:
-        # This combines the setup from both blocks
-        pdata = user_chart.get("planets", {}).get(pname, {}) 
+    planets = user_chart.get("planets", {})
+    for pname, pdata in planets.items():
+        # Base packet
+        sign   = pdata.get("sign")
+        house  = pdata.get("house")
+        degree = pdata.get("longitude")
+
         finding = {
             "feature_type": "planet_position",
             "planet": pname,
-            "sign": pdata.get("sign", "unknown"),
-            "house": pdata.get("house", "unknown"),
-            "degree": pdata.get("longitude", "unknown"),
+            "sign": sign if sign is not None else "unknown",
+            "house": house if house is not None else "unknown",
+            "degree": degree if degree is not None else "unknown",
             "details": {},
-            "meta": {"source": "get_all_planetary_data"}
+            "meta": {"source": "get_all_planetary_data"},
         }
-        
-        # Dignity and Status (from the second block's logic)
-        finding['details']['dignity'] = pdata.get('dignity', 'N/A')
-        finding['details']['status'] = pdata.get('status', 'N/A')
 
-        # Avasthas (from the second block)
+        # Dignity / status
+        finding["details"]["dignity"] = pdata.get("dignity", "N/A")
+        finding["details"]["status"]  = pdata.get("status",  "N/A")
+
+        # Avasthas
         av = get_planet_avasthas(pname, user_chart)
-        finding['details']['baladi_avastha'] = av.get('baladi')
-        finding['details']['deeptadi_avastha'] = av.get('deeptadi')
-        finding['details']['lajjitaadi_avastha'] = get_lajjitaadi_avasthas(pname, user_chart)
+        finding["details"]["baladi_avastha"]  = av.get("baladi")
+        finding["details"]["deeptadi_avastha"] = av.get("deeptadi")
 
-        # Positional Strength (from the second block)
-        cusps = user_chart.get('house_cusps_sidereal') or user_chart.get('house_cusps')
-        if cusps:
-            pos = evaluator.evaluate_planetary_positional_strength(pdata['longitude'], pdata['house'], cusps)
-            finding['details']['bhava_positional_strength'] = pos.get('status')
+        # Positional strength (only if we have the inputs)
+        cusps = user_chart.get("house_cusps_sidereal") or user_chart.get("house_cusps")
+        if cusps and degree is not None and house:
+            pos = evaluator.evaluate_planetary_positional_strength(degree, house, cusps)
+            finding["details"]["bhava_positional_strength"] = pos.get("status")
 
-        # Bhavesha Strength Summary
-        finding['details']['bhavesha_strength_summary'] = evaluator.evaluate_bhavesha_strength(user_chart, pdata['house'])
-
-        # Shadbala total
-        finding['details']['shadbala_total'] = pdata.get('shadbala', {}).get('total')
+        # Bhavesha summary (only if we have house)
+        if house:
+            finding["details"]["bhavesha_strength_summary"] = evaluator.evaluate_bhavesha_strength(user_chart, house)
 
         # Sarvashtakavarga bindus for the planet's sign
-        sav = user_chart.get('ashtakavarga_scores', {}).get('sarvashtakavarga', {})
-        finding['details']['sarvashtakavarga_score_for_house'] = sav.get(pdata['sign'], 0)
+        sav = user_chart.get("ashtakavarga_scores", {}).get("sarvashtakavarga", {})
+        finding["details"]["sarvashtakavarga_score_for_house"] = sav.get(sign, 0)
 
-        # Vargottama
-        finding['details']['vargottama_status'] = (pdata.get('d9_sign') == pdata.get('sign'))
-     
-        # Pre-written insight keys (from the second block)
-        finding['pre_written_insight_keys'] = [
-            {"category": "graha-", "key": pname},
-            {"category": "graha_in_bhava", "key": f"{pname}_in_{pdata['house']}th_house"},
-            {"category": "graha_in_rashi", "key": f"{pname}_in_{pdata['sign']}"},
-            # ... other keys
-        ]
-        finding['pre_written_insight_keys'] = [k for k in finding['pre_written_insight_keys'] if k]
+        # Vargottama flag
+        finding["details"]["vargottama_status"] = (pdata.get("d9_sign") == sign)
 
-        # Finally, append the detailed `finding` dictionary to our list
+        # Pre-written insight keys (build safely; no dangling brackets)
+        pw = [{"category": "graha-", "key": pname}]
+        if house:
+            pw.append({"category": "graha_in_bhava", "key": f"{pname}_in_{house}th_house"})
+        if sign:
+            pw.append({"category": "graha_in_rashi", "key": f"{pname}_in_{sign}"})
+        finding["pre_written_insight_keys"] = pw
+
         planetary_findings.append(finding)
 
     return planetary_findings
@@ -927,7 +1132,8 @@ def identify_all_yogas(user_chart):
             "status": kem['type'],
             "cancellation_reasons": [r for r in kem.get('cancellation_reasons', [])],
             "relevant_planets": ["moon"],
-            "relevant_houses": [user_chart['planets']['moon']['house']],
+            "relevant_houses": [user_chart['planets']['moon'].get('house')],
+
             "pre_written_insight_keys": [
                 {"category": "yoga_interpretation", "key": f"kemadruma_yoga_{kem['type'].lower()}"}
             ] + ([{"category": "kemadruma_cancellation_reasons", "key": r} for r in kem.get('cancellation_reasons', [])] if kem.get('cancellation_reasons') else [])
@@ -935,7 +1141,24 @@ def identify_all_yogas(user_chart):
 
     # Neecha Bhanga Raja Yoga (if any planet debilitated)
     for pname, pdata in user_chart['planets'].items():
-        if pdata['dignity'] == 'Debilitation':
+        # Skip nodes (no dignity defined)
+        if pname in ("rahu", "ketu"):
+            continue
+
+        # Ensure dignity exists; derive if missing
+        dign = pdata.get("dignity")
+        if not dign:
+            sign = pdata.get("sign")
+            if sign in ac.SIGNS:
+                try:
+                    dign = rohini_engine.get_planet_dignity(pname, sign)
+                except Exception:
+                    dign = "Neutral Sign"
+            else:
+                dign = "Neutral Sign"
+            pdata["dignity"] = dign  # cache for downstream users
+
+        if dign == "Debilitation":
             reasons = evaluator.check_neecha_bhanga(pname, user_chart)
             if reasons:
                 yogas_found.append({
@@ -945,10 +1168,11 @@ def identify_all_yogas(user_chart):
                     "is_present": True,
                     "relevant_planet": pname,
                     "cancellation_reasons": [r['key'] for r in reasons],
-                    "relevant_houses": [pdata['house']],
-                    "pre_written_insight_keys": [
-                        {"category": "raja_yoga", "key": "neecha_bhanga_raja_yoga"}
-                    ] + [{"category": "neecha_bhanga_reasons", "key": r['key']} for r in reasons]
+                    "relevant_houses": [pdata.get('house')],
+                    "pre_written_insight_keys": (
+                        [{"category": "raja_yoga", "key": "neecha_bhanga_raja_yoga"}] +
+                        [{"category": "neecha_bhanga_reasons", "key": r['key']} for r in reasons]
+                    )
                 })
 
     # Gajakesari (Moon-Jupiter Kendra)
@@ -1213,6 +1437,14 @@ def run_all_analysis(user_chart, transit_positions, ashtakavarga_scores, related
     """
     Orchestrates core analysis functions and returns raw findings.
     """
+    # NEW: opportunistic enrichment + computed basics
+    try:
+        # If you already have _analysis_enrich_with_resolver, keep it
+        user_chart = _analysis_enrich_with_resolver(user_chart)  # no-op if not wired
+    except Exception:
+        pass
+    _ensure_houses_and_min_basics(user_chart)
+
     findings = []
     # 1) Planetary packets
     findings.extend(get_all_planetary_data(user_chart))
