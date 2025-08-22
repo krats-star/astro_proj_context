@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-21 17:50:15Z UTC**
-- Commit: `50c5feb0c6d09498b35de06c9f751aac9847cd6c`
+- Generated: **2025-08-22 01:32:14Z UTC**
+- Commit: `3383c5136955d598bc0cba7658396e3d4f2810a7`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -2311,6 +2311,11 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
             FeatureID.MOON_LONGITUDE, FeatureID.MOON_SIGN,
             FeatureID.MOON_NAKSHATRA, FeatureID.MOON_PADA,
             FeatureID.SHADBALA_SUN_TOTAL, FeatureID.SHADBALA_MOON_TOTAL,
+            FeatureID.MARS_LONGITUDE, FeatureID.MARS_SIGN,
+            FeatureID.MERCURY_LONGITUDE, FeatureID.MERCURY_SIGN,
+            FeatureID.JUPITER_LONGITUDE, FeatureID.JUPITER_SIGN,
+            FeatureID.VENUS_LONGITUDE, FeatureID.VENUS_SIGN,
+            FeatureID.SATURN_LONGITUDE, FeatureID.SATURN_SIGN,
         ])
 
         # Asc
@@ -2341,6 +2346,42 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
             moon["pada"] = vals[FeatureID.MOON_PADA]
         if vals.get(FeatureID.SHADBALA_MOON_TOTAL) is not None:
             moon.setdefault("shadbala", {})["total"] = vals[FeatureID.SHADBALA_MOON_TOTAL]
+        
+        # Mars
+        mars = user_chart.setdefault("planets", {}).setdefault("mars", {})
+        if vals.get(FeatureID.MARS_LONGITUDE) is not None and mars.get("longitude") is None:
+            mars["longitude"] = vals[FeatureID.MARS_LONGITUDE]
+        if vals.get(FeatureID.MARS_SIGN) is not None and mars.get("sign") is None:
+            mars["sign"] = vals[FeatureID.MARS_SIGN]
+
+        # Mercury
+        mercury = user_chart.setdefault("planets", {}).setdefault("mercury", {})
+        if vals.get(FeatureID.MERCURY_LONGITUDE) is not None and mercury.get("longitude") is None:
+            mercury["longitude"] = vals[FeatureID.MERCURY_LONGITUDE]
+        if vals.get(FeatureID.MERCURY_SIGN) is not None and mercury.get("sign") is None:
+            mercury["sign"] = vals[FeatureID.MERCURY_SIGN]
+
+        # Jupiter
+        jupiter = user_chart.setdefault("planets", {}).setdefault("jupiter", {})
+        if vals.get(FeatureID.JUPITER_LONGITUDE) is not None and jupiter.get("longitude") is None:
+            jupiter["longitude"] = vals[FeatureID.JUPITER_LONGITUDE]
+        if vals.get(FeatureID.JUPITER_SIGN) is not None and jupiter.get("sign") is None:
+            jupiter["sign"] = vals[FeatureID.JUPITER_SIGN]
+
+        # Venus
+        venus = user_chart.setdefault("planets", {}).setdefault("venus", {})
+        if vals.get(FeatureID.VENUS_LONGITUDE) is not None and venus.get("longitude") is None:
+            venus["longitude"] = vals[FeatureID.VENUS_LONGITUDE]
+        if vals.get(FeatureID.VENUS_SIGN) is not None and venus.get("sign") is None:
+            venus["sign"] = vals[FeatureID.VENUS_SIGN]
+
+        # Saturn
+        saturn = user_chart.setdefault("planets", {}).setdefault("saturn", {})
+        if vals.get(FeatureID.SATURN_LONGITUDE) is not None and saturn.get("longitude") is None:
+            saturn["longitude"] = vals[FeatureID.SATURN_LONGITUDE]
+        if vals.get(FeatureID.SATURN_SIGN) is not None and saturn.get("sign") is None:
+            saturn["sign"] = vals[FeatureID.SATURN_SIGN]
+
 
         # Note: no DB commit here (this helper is purely in-memory)
     except Exception as e:
