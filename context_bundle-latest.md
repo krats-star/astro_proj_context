@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-22 06:39:31Z UTC**
-- Commit: `4ed1f9b0219ecf279c7675deb850f5502d0d69ef`
+- Generated: **2025-08-22 07:05:39Z UTC**
+- Commit: `5cd373ae80e98e184f919a749d2a1396c56775fe`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -2301,6 +2301,27 @@ def heal_chart_features_by_id(chart_id: int, feature_ids=None) -> dict:
             # Rahu/Ketu
             FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN,
             FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN,
+
+            # NEW (Step 16): Houses (whole-sign) for classical planets
+            FeatureID.SUN_HOUSE, FeatureID.MOON_HOUSE, FeatureID.MARS_HOUSE,
+            FeatureID.MERCURY_HOUSE, FeatureID.JUPITER_HOUSE, FeatureID.VENUS_HOUSE,
+            FeatureID.SATURN_HOUSE,
+
+            # NEW (Step 16): Dignity for classical planets
+            FeatureID.SUN_DIGNITY, FeatureID.MOON_DIGNITY, FeatureID.MARS_DIGNITY,
+            FeatureID.MERCURY_DIGNITY, FeatureID.JUPITER_DIGNITY, FeatureID.VENUS_DIGNITY,
+            FeatureID.SATURN_DIGNITY,
+            # NEW: D9 signs
+            FeatureID.SUN_D9_SIGN, FeatureID.MOON_D9_SIGN, FeatureID.MARS_D9_SIGN,
+            FeatureID.MERCURY_D9_SIGN, FeatureID.JUPITER_D9_SIGN, FeatureID.VENUS_D9_SIGN,
+            FeatureID.SATURN_D9_SIGN,
+
+            # Node houses
+            FeatureID.RAHU_HOUSE, FeatureID.KETU_HOUSE,
+            # Retro flags
+            FeatureID.MERCURY_RETROGRADE, FeatureID.VENUS_RETROGRADE,
+            FeatureID.MARS_RETROGRADE, FeatureID.JUPITER_RETROGRADE,             FeatureID.SATURN_RETROGRADE,
+
         ]
 
     if not _feature_resolver_enabled():
@@ -2346,6 +2367,7 @@ def heal_chart_features_by_id(chart_id: int, feature_ids=None) -> dict:
         "rahu": {"longitude": rahu.get("longitude"), "sign": rahu.get("sign")},
         "ketu": {"longitude": ketu.get("longitude"), "sign": ketu.get("sign")},
     }
+
 
 
 
@@ -2552,6 +2574,7 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
         )
         res = FeatureResolver(row)
         vals = res.get_features([
+            # core longitudes/signs
             FeatureID.ASC_LONGITUDE, FeatureID.ASC_SIGN,
             FeatureID.SUN_LONGITUDE, FeatureID.SUN_SIGN,
             FeatureID.MOON_LONGITUDE, FeatureID.MOON_SIGN,
@@ -2564,6 +2587,23 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
             FeatureID.SATURN_LONGITUDE, FeatureID.SATURN_SIGN,
             FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN,
             FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN,
+
+            # NEW (Step 16): houses + dignities
+            FeatureID.SUN_HOUSE, FeatureID.MOON_HOUSE, FeatureID.MARS_HOUSE,
+            FeatureID.MERCURY_HOUSE, FeatureID.JUPITER_HOUSE, FeatureID.VENUS_HOUSE,
+            FeatureID.SATURN_HOUSE,
+            FeatureID.SUN_DIGNITY, FeatureID.MOON_DIGNITY, FeatureID.MARS_DIGNITY,
+            FeatureID.MERCURY_DIGNITY, FeatureID.JUPITER_DIGNITY, FeatureID.VENUS_DIGNITY,
+            FeatureID.SATURN_DIGNITY,
+            FeatureID.SUN_D9_SIGN, FeatureID.MOON_D9_SIGN, FeatureID.MARS_D9_SIGN,
+            FeatureID.MERCURY_D9_SIGN, FeatureID.JUPITER_D9_SIGN, FeatureID.VENUS_D9_SIGN,
+            FeatureID.SATURN_D9_SIGN,
+            # node houses
+            FeatureID.RAHU_HOUSE, FeatureID.KETU_HOUSE,
+            # retro flags
+            FeatureID.MERCURY_RETROGRADE, FeatureID.VENUS_RETROGRADE,
+            FeatureID.MARS_RETROGRADE, FeatureID.JUPITER_RETROGRADE,                                     FeatureID.SATURN_RETROGRADE,
+
         ])
 
         # Asc
@@ -2573,76 +2613,105 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
         if vals.get(FeatureID.ASC_SIGN) is not None and asc.get("sign") is None:
             asc["sign"] = vals[FeatureID.ASC_SIGN]
 
-        # Sun
-        sun = user_chart.setdefault("planets", {}).setdefault("sun", {})
-        if vals.get(FeatureID.SUN_LONGITUDE) is not None and sun.get("longitude") is None:
-            sun["longitude"] = vals[FeatureID.SUN_LONGITUDE]
-        if vals.get(FeatureID.SUN_SIGN) is not None and sun.get("sign") is None:
-            sun["sign"] = vals[FeatureID.SUN_SIGN]
-        if vals.get(FeatureID.SHADBALA_SUN_TOTAL) is not None:
-            sun.setdefault("shadbala", {})["total"] = vals[FeatureID.SHADBALA_SUN_TOTAL]
+        planets = user_chart.setdefault("planets", {})
 
-        # Moon
-        moon = user_chart.setdefault("planets", {}).setdefault("moon", {})
-        if vals.get(FeatureID.MOON_LONGITUDE) is not None and moon.get("longitude") is None:
-            moon["longitude"] = vals[FeatureID.MOON_LONGITUDE]
-        if vals.get(FeatureID.MOON_SIGN) is not None and moon.get("sign") is None:
-            moon["sign"] = vals[FeatureID.MOON_SIGN]
-        if vals.get(FeatureID.MOON_NAKSHATRA) is not None and moon.get("nakshatra") is None:
+        def _put_planet(pname, fid_lon, fid_sign, fid_house=None, fid_dignity=None, fid_shadbala=None):
+            node = planets.setdefault(pname, {})
+            if fid_lon is not None and node.get("longitude") is None and vals.get(fid_lon) is not None:
+                node["longitude"] = vals[fid_lon]
+            if fid_sign is not None and node.get("sign") is None and vals.get(fid_sign) is not None:
+                node["sign"] = vals[fid_sign]
+            if fid_house is not None and node.get("house") is None and vals.get(fid_house) is not None:
+                node["house"] = vals[fid_house]
+            if fid_dignity is not None and node.get("dignity") is None and vals.get(fid_dignity) is not None:
+                node["dignity"] = vals[fid_dignity]
+            if fid_shadbala is not None and vals.get(fid_shadbala) is not None:
+                node.setdefault("shadbala", {})["total"] = vals[fid_shadbala]
+
+        # Sun & Moon (with shadbala; moon extra fields set below)
+        _put_planet("sun",
+            FeatureID.SUN_LONGITUDE, FeatureID.SUN_SIGN,
+            FeatureID.SUN_HOUSE, FeatureID.SUN_DIGNITY,
+            FeatureID.SHADBALA_SUN_TOTAL
+        )
+        _put_planet("moon",
+            FeatureID.MOON_LONGITUDE, FeatureID.MOON_SIGN,
+            FeatureID.MOON_HOUSE, FeatureID.MOON_DIGNITY,
+            FeatureID.SHADBALA_MOON_TOTAL
+        )
+
+        # Moon extras: nakshatra/pada
+        moon = planets.setdefault("moon", {})
+        if moon.get("nakshatra") is None and vals.get(FeatureID.MOON_NAKSHATRA) is not None:
             moon["nakshatra"] = vals[FeatureID.MOON_NAKSHATRA]
-        if vals.get(FeatureID.MOON_PADA) is not None and moon.get("pada") is None:
+        if moon.get("pada") is None and vals.get(FeatureID.MOON_PADA) is not None:
             moon["pada"] = vals[FeatureID.MOON_PADA]
-        if vals.get(FeatureID.SHADBALA_MOON_TOTAL) is not None:
-            moon.setdefault("shadbala", {})["total"] = vals[FeatureID.SHADBALA_MOON_TOTAL]
-        
-        # Mars
-        mars = user_chart.setdefault("planets", {}).setdefault("mars", {})
-        if vals.get(FeatureID.MARS_LONGITUDE) is not None and mars.get("longitude") is None:
-            mars["longitude"] = vals[FeatureID.MARS_LONGITUDE]
-        if vals.get(FeatureID.MARS_SIGN) is not None and mars.get("sign") is None:
-            mars["sign"] = vals[FeatureID.MARS_SIGN]
 
-        # Mercury
-        mercury = user_chart.setdefault("planets", {}).setdefault("mercury", {})
-        if vals.get(FeatureID.MERCURY_LONGITUDE) is not None and mercury.get("longitude") is None:
-            mercury["longitude"] = vals[FeatureID.MERCURY_LONGITUDE]
-        if vals.get(FeatureID.MERCURY_SIGN) is not None and mercury.get("sign") is None:
-            mercury["sign"] = vals[FeatureID.MERCURY_SIGN]
+        # Mars → Saturn
+        _put_planet("mars",    FeatureID.MARS_LONGITUDE,    FeatureID.MARS_SIGN,    FeatureID.MARS_HOUSE,    FeatureID.MARS_DIGNITY)
+        _put_planet("mercury", FeatureID.MERCURY_LONGITUDE, FeatureID.MERCURY_SIGN, FeatureID.MERCURY_HOUSE, FeatureID.MERCURY_DIGNITY)
+        _put_planet("jupiter", FeatureID.JUPITER_LONGITUDE, FeatureID.JUPITER_SIGN, FeatureID.JUPITER_HOUSE, FeatureID.JUPITER_DIGNITY)
+        _put_planet("venus",   FeatureID.VENUS_LONGITUDE,   FeatureID.VENUS_SIGN,   FeatureID.VENUS_HOUSE,   FeatureID.VENUS_DIGNITY)
+        _put_planet("saturn",  FeatureID.SATURN_LONGITUDE,  FeatureID.SATURN_SIGN,  FeatureID.SATURN_HOUSE,  FeatureID.SATURN_DIGNITY)
 
-        # Jupiter
-        jupiter = user_chart.setdefault("planets", {}).setdefault("jupiter", {})
-        if vals.get(FeatureID.JUPITER_LONGITUDE) is not None and jupiter.get("longitude") is None:
-            jupiter["longitude"] = vals[FeatureID.JUPITER_LONGITUDE]
-        if vals.get(FeatureID.JUPITER_SIGN) is not None and jupiter.get("sign") is None:
-            jupiter["sign"] = vals[FeatureID.JUPITER_SIGN]
+        # Nodes (no house/dignity)
+        _put_planet("rahu", FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN)
+        _put_planet("ketu", FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN)
 
-        # Venus
-        venus = user_chart.setdefault("planets", {}).setdefault("venus", {})
-        if vals.get(FeatureID.VENUS_LONGITUDE) is not None and venus.get("longitude") is None:
-            venus["longitude"] = vals[FeatureID.VENUS_LONGITUDE]
-        if vals.get(FeatureID.VENUS_SIGN) is not None and venus.get("sign") is None:
-            venus["sign"] = vals[FeatureID.VENUS_SIGN]
+        # --- D9 (Navamsa) sign: write if missing ------------------------------------
+        sun = planets.setdefault("sun", {})
+        if sun.get("d9_sign") is None and vals.get(FeatureID.SUN_D9_SIGN) is not None:
+            sun["d9_sign"] = vals[FeatureID.SUN_D9_SIGN]
 
-        # Saturn
-        saturn = user_chart.setdefault("planets", {}).setdefault("saturn", {})
-        if vals.get(FeatureID.SATURN_LONGITUDE) is not None and saturn.get("longitude") is None:
-            saturn["longitude"] = vals[FeatureID.SATURN_LONGITUDE]
-        if vals.get(FeatureID.SATURN_SIGN) is not None and saturn.get("sign") is None:
-            saturn["sign"] = vals[FeatureID.SATURN_SIGN]
+        moon = planets.setdefault("moon", {})
+        if moon.get("d9_sign") is None and vals.get(FeatureID.MOON_D9_SIGN) is not None:
+            moon["d9_sign"] = vals[FeatureID.MOON_D9_SIGN]
 
-        # Rahu
-        rahu = user_chart.setdefault("planets", {}).setdefault("rahu", {})
-        if vals.get(FeatureID.RAHU_LONGITUDE) is not None and rahu.get("longitude") is None:
-            rahu["longitude"] = vals[FeatureID.RAHU_LONGITUDE]
-        if vals.get(FeatureID.RAHU_SIGN) is not None and rahu.get("sign") is None:
-            rahu["sign"] = vals[FeatureID.RAHU_SIGN]
+        mars = planets.setdefault("mars", {})
+        if mars.get("d9_sign") is None and vals.get(FeatureID.MARS_D9_SIGN) is not None:
+            mars["d9_sign"] = vals[FeatureID.MARS_D9_SIGN]
 
-        # Ketu
-        ketu = user_chart.setdefault("planets", {}).setdefault("ketu", {})
-        if vals.get(FeatureID.KETU_LONGITUDE) is not None and ketu.get("longitude") is None:
-            ketu["longitude"] = vals[FeatureID.KETU_LONGITUDE]
-        if vals.get(FeatureID.KETU_SIGN) is not None and ketu.get("sign") is None:
-            ketu["sign"] = vals[FeatureID.KETU_SIGN]
+        mercury = planets.setdefault("mercury", {})
+        if mercury.get("d9_sign") is None and vals.get(FeatureID.MERCURY_D9_SIGN) is not None:
+            mercury["d9_sign"] = vals[FeatureID.MERCURY_D9_SIGN]
+
+        jupiter = planets.setdefault("jupiter", {})
+        if jupiter.get("d9_sign") is None and vals.get(FeatureID.JUPITER_D9_SIGN) is not None:
+            jupiter["d9_sign"] = vals[FeatureID.JUPITER_D9_SIGN]
+
+        venus = planets.setdefault("venus", {})
+        if venus.get("d9_sign") is None and vals.get(FeatureID.VENUS_D9_SIGN) is not None:
+            venus["d9_sign"] = vals[FeatureID.VENUS_D9_SIGN]
+
+        saturn = planets.setdefault("saturn", {})
+        if saturn.get("d9_sign") is None and vals.get(FeatureID.SATURN_D9_SIGN) is not None:
+            saturn["d9_sign"] = vals[FeatureID.SATURN_D9_SIGN]
+
+
+        # Houses for nodes
+        rahu = planets.setdefault("rahu", {})
+        if rahu.get("house") is None and vals.get(FeatureID.RAHU_HOUSE) is not None:
+            rahu["house"] = vals[FeatureID.RAHU_HOUSE]
+
+        ketu = planets.setdefault("ketu", {})
+        if ketu.get("house") is None and vals.get(FeatureID.KETU_HOUSE) is not None:
+            ketu["house"] = vals[FeatureID.KETU_HOUSE]
+
+        # Retrograde flags for classical 5
+        for pname, fid in [
+            ("mercury", FeatureID.MERCURY_RETROGRADE),
+            ("venus",   FeatureID.VENUS_RETROGRADE),
+            ("mars",    FeatureID.MARS_RETROGRADE),
+            ("jupiter", FeatureID.JUPITER_RETROGRADE),
+            ("saturn",  FeatureID.SATURN_RETROGRADE),
+        ]:
+            node = planets.setdefault(pname, {})
+            if node.get("retrograde") is None and vals.get(fid) is not None:
+                node["retrograde"] = bool(vals[fid])
+
+
+
+
 
         # Note: no DB commit here (this helper is purely in-memory)
     except Exception as e:
