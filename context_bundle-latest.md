@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-22 07:05:39Z UTC**
-- Commit: `5cd373ae80e98e184f919a749d2a1396c56775fe`
+- Generated: **2025-08-22 09:10:04Z UTC**
+- Commit: `10890447339a7a47ca9cf5e055147565cdd10dab`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -2322,6 +2322,19 @@ def heal_chart_features_by_id(chart_id: int, feature_ids=None) -> dict:
             FeatureID.MERCURY_RETROGRADE, FeatureID.VENUS_RETROGRADE,
             FeatureID.MARS_RETROGRADE, FeatureID.JUPITER_RETROGRADE,             FeatureID.SATURN_RETROGRADE,
 
+            # Bundle R2: D10 + D7 + shadbala(Mars–Saturn) + combust(Mercury–Saturn)
+            FeatureID.SUN_D10_SIGN, FeatureID.MOON_D10_SIGN, FeatureID.MARS_D10_SIGN,
+            FeatureID.MERCURY_D10_SIGN, FeatureID.JUPITER_D10_SIGN, FeatureID.VENUS_D10_SIGN,
+            FeatureID.SATURN_D10_SIGN,
+            FeatureID.SUN_D7_SIGN, FeatureID.MOON_D7_SIGN, FeatureID.MARS_D7_SIGN,
+            FeatureID.MERCURY_D7_SIGN, FeatureID.JUPITER_D7_SIGN, FeatureID.VENUS_D7_SIGN,
+            FeatureID.SATURN_D7_SIGN,
+            FeatureID.SHADBALA_MARS_TOTAL, FeatureID.SHADBALA_MERCURY_TOTAL,
+            FeatureID.SHADBALA_JUPITER_TOTAL, FeatureID.SHADBALA_VENUS_TOTAL,
+            FeatureID.SHADBALA_SATURN_TOTAL,
+            FeatureID.MERCURY_COMBUST, FeatureID.VENUS_COMBUST, FeatureID.MARS_COMBUST,
+            FeatureID.JUPITER_COMBUST, FeatureID.SATURN_COMBUST,
+
         ]
 
     if not _feature_resolver_enabled():
@@ -2574,7 +2587,7 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
         )
         res = FeatureResolver(row)
         vals = res.get_features([
-            # core longitudes/signs
+            # core lon/signs already used elsewhere
             FeatureID.ASC_LONGITUDE, FeatureID.ASC_SIGN,
             FeatureID.SUN_LONGITUDE, FeatureID.SUN_SIGN,
             FeatureID.MOON_LONGITUDE, FeatureID.MOON_SIGN,
@@ -2588,7 +2601,7 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
             FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN,
             FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN,
 
-            # NEW (Step 16): houses + dignities
+            # houses + dignities + D9 (already added in step16/17)
             FeatureID.SUN_HOUSE, FeatureID.MOON_HOUSE, FeatureID.MARS_HOUSE,
             FeatureID.MERCURY_HOUSE, FeatureID.JUPITER_HOUSE, FeatureID.VENUS_HOUSE,
             FeatureID.SATURN_HOUSE,
@@ -2598,12 +2611,24 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
             FeatureID.SUN_D9_SIGN, FeatureID.MOON_D9_SIGN, FeatureID.MARS_D9_SIGN,
             FeatureID.MERCURY_D9_SIGN, FeatureID.JUPITER_D9_SIGN, FeatureID.VENUS_D9_SIGN,
             FeatureID.SATURN_D9_SIGN,
-            # node houses
-            FeatureID.RAHU_HOUSE, FeatureID.KETU_HOUSE,
-            # retro flags
-            FeatureID.MERCURY_RETROGRADE, FeatureID.VENUS_RETROGRADE,
-            FeatureID.MARS_RETROGRADE, FeatureID.JUPITER_RETROGRADE,                                     FeatureID.SATURN_RETROGRADE,
 
+            # NEW in R2: D10 + D7 + shadbala (Mars–Saturn) + combust (Mercury–Saturn)
+            FeatureID.SUN_D10_SIGN, FeatureID.MOON_D10_SIGN, FeatureID.MARS_D10_SIGN,
+            FeatureID.MERCURY_D10_SIGN, FeatureID.JUPITER_D10_SIGN, FeatureID.VENUS_D10_SIGN,
+            FeatureID.SATURN_D10_SIGN,
+            FeatureID.SUN_D7_SIGN, FeatureID.MOON_D7_SIGN, FeatureID.MARS_D7_SIGN,
+            FeatureID.MERCURY_D7_SIGN, FeatureID.JUPITER_D7_SIGN, FeatureID.VENUS_D7_SIGN,
+            FeatureID.SATURN_D7_SIGN,
+            FeatureID.SHADBALA_MARS_TOTAL, FeatureID.SHADBALA_MERCURY_TOTAL,
+            FeatureID.SHADBALA_JUPITER_TOTAL, FeatureID.SHADBALA_VENUS_TOTAL,
+            FeatureID.SHADBALA_SATURN_TOTAL,
+            FeatureID.MERCURY_RETROGRADE, FeatureID.VENUS_RETROGRADE, FeatureID.MARS_RETROGRADE,
+            FeatureID.JUPITER_RETROGRADE, FeatureID.SATURN_RETROGRADE,
+            FeatureID.MERCURY_COMBUST, FeatureID.VENUS_COMBUST, FeatureID.MARS_COMBUST,
+            FeatureID.JUPITER_COMBUST, FeatureID.SATURN_COMBUST,
+
+            # Node houses (from earlier bundle)
+            FeatureID.RAHU_HOUSE, FeatureID.KETU_HOUSE,
         ])
 
         # Asc
@@ -2628,19 +2653,15 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
             if fid_shadbala is not None and vals.get(fid_shadbala) is not None:
                 node.setdefault("shadbala", {})["total"] = vals[fid_shadbala]
 
-        # Sun & Moon (with shadbala; moon extra fields set below)
+        # Sun & Moon
         _put_planet("sun",
             FeatureID.SUN_LONGITUDE, FeatureID.SUN_SIGN,
-            FeatureID.SUN_HOUSE, FeatureID.SUN_DIGNITY,
-            FeatureID.SHADBALA_SUN_TOTAL
-        )
+            FeatureID.SUN_HOUSE, FeatureID.SUN_DIGNITY, FeatureID.SHADBALA_SUN_TOTAL)
         _put_planet("moon",
             FeatureID.MOON_LONGITUDE, FeatureID.MOON_SIGN,
-            FeatureID.MOON_HOUSE, FeatureID.MOON_DIGNITY,
-            FeatureID.SHADBALA_MOON_TOTAL
-        )
+            FeatureID.MOON_HOUSE, FeatureID.MOON_DIGNITY, FeatureID.SHADBALA_MOON_TOTAL)
 
-        # Moon extras: nakshatra/pada
+        # Moon extras
         moon = planets.setdefault("moon", {})
         if moon.get("nakshatra") is None and vals.get(FeatureID.MOON_NAKSHATRA) is not None:
             moon["nakshatra"] = vals[FeatureID.MOON_NAKSHATRA]
@@ -2648,13 +2669,23 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
             moon["pada"] = vals[FeatureID.MOON_PADA]
 
         # Mars → Saturn
-        _put_planet("mars",    FeatureID.MARS_LONGITUDE,    FeatureID.MARS_SIGN,    FeatureID.MARS_HOUSE,    FeatureID.MARS_DIGNITY)
-        _put_planet("mercury", FeatureID.MERCURY_LONGITUDE, FeatureID.MERCURY_SIGN, FeatureID.MERCURY_HOUSE, FeatureID.MERCURY_DIGNITY)
-        _put_planet("jupiter", FeatureID.JUPITER_LONGITUDE, FeatureID.JUPITER_SIGN, FeatureID.JUPITER_HOUSE, FeatureID.JUPITER_DIGNITY)
-        _put_planet("venus",   FeatureID.VENUS_LONGITUDE,   FeatureID.VENUS_SIGN,   FeatureID.VENUS_HOUSE,   FeatureID.VENUS_DIGNITY)
-        _put_planet("saturn",  FeatureID.SATURN_LONGITUDE,  FeatureID.SATURN_SIGN,  FeatureID.SATURN_HOUSE,  FeatureID.SATURN_DIGNITY)
+        _put_planet("mars",    FeatureID.MARS_LONGITUDE,    FeatureID.MARS_SIGN,    FeatureID.MARS_HOUSE,    FeatureID.MARS_DIGNITY,    FeatureID.SHADBALA_MARS_TOTAL)
+        _put_planet("mercury", FeatureID.MERCURY_LONGITUDE, FeatureID.MERCURY_SIGN, FeatureID.MERCURY_HOUSE, FeatureID.MERCURY_DIGNITY, FeatureID.SHADBALA_MERCURY_TOTAL)
+        _put_planet("jupiter", FeatureID.JUPITER_LONGITUDE, FeatureID.JUPITER_SIGN, FeatureID.JUPITER_HOUSE, FeatureID.JUPITER_DIGNITY, FeatureID.SHADBALA_JUPITER_TOTAL)
+        _put_planet("venus",   FeatureID.VENUS_LONGITUDE,   FeatureID.VENUS_SIGN,   FeatureID.VENUS_HOUSE,   FeatureID.VENUS_DIGNITY,   FeatureID.SHADBALA_VENUS_TOTAL)
+        _put_planet("saturn",  FeatureID.SATURN_LONGITUDE,  FeatureID.SATURN_SIGN,  FeatureID.SATURN_HOUSE,  FeatureID.SATURN_DIGNITY,  FeatureID.SHADBALA_SATURN_TOTAL)
 
-        # Nodes (no house/dignity)
+        # Nodes: lon/sign + house
+        _put_planet("rahu", FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN)
+        _put_planet("ketu", FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN)
+        rahu = planets.setdefault("rahu", {})
+        if rahu.get("house") is None and vals.get(FeatureID.RAHU_HOUSE) is not None:
+            rahu["house"] = vals[FeatureID.RAHU_HOUSE]
+        ketu = planets.setdefault("ketu", {})
+        if ketu.get("house") is None and vals.get(FeatureID.KETU_HOUSE) is not None:
+            ketu["house"] = vals[FeatureID.KETU_HOUSE]
+
+        # Nodes (house yes, dignity no)
         _put_planet("rahu", FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN)
         _put_planet("ketu", FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN)
 
@@ -2688,6 +2719,28 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
             saturn["d9_sign"] = vals[FeatureID.SATURN_D9_SIGN]
 
 
+        # D10
+        for pname, fid in [
+            ("sun", FeatureID.SUN_D10_SIGN), ("moon", FeatureID.MOON_D10_SIGN),
+            ("mars", FeatureID.MARS_D10_SIGN), ("mercury", FeatureID.MERCURY_D10_SIGN),
+            ("jupiter", FeatureID.JUPITER_D10_SIGN), ("venus", FeatureID.VENUS_D10_SIGN),
+            ("saturn", FeatureID.SATURN_D10_SIGN),
+        ]:
+            node = planets.setdefault(pname, {})
+            if node.get("d10_sign") is None and vals.get(fid) is not None:
+                node["d10_sign"] = vals[fid]
+
+        # D7
+        for pname, fid in [
+            ("sun", FeatureID.SUN_D7_SIGN), ("moon", FeatureID.MOON_D7_SIGN),
+            ("mars", FeatureID.MARS_D7_SIGN), ("mercury", FeatureID.MERCURY_D7_SIGN),
+            ("jupiter", FeatureID.JUPITER_D7_SIGN), ("venus", FeatureID.VENUS_D7_SIGN),
+            ("saturn", FeatureID.SATURN_D7_SIGN),
+        ]:
+            node = planets.setdefault(pname, {})
+            if node.get("d7_sign") is None and vals.get(fid) is not None:
+                node["d7_sign"] = vals[fid]
+
         # Houses for nodes
         rahu = planets.setdefault("rahu", {})
         if rahu.get("house") is None and vals.get(FeatureID.RAHU_HOUSE) is not None:
@@ -2710,8 +2763,17 @@ def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
                 node["retrograde"] = bool(vals[fid])
 
 
-
-
+        # Retro flags are already present; now set combustion flags
+        for pname, fid in [
+            ("mercury", FeatureID.MERCURY_COMBUST),
+            ("venus",   FeatureID.VENUS_COMBUST),
+            ("mars",    FeatureID.MARS_COMBUST),
+            ("jupiter", FeatureID.JUPITER_COMBUST),
+            ("saturn",  FeatureID.SATURN_COMBUST),
+        ]:
+            node = planets.setdefault(pname, {})
+            if node.get("combust") is None and vals.get(fid) is not None:
+                node["combust"] = bool(vals[fid])
 
         # Note: no DB commit here (this helper is purely in-memory)
     except Exception as e:
