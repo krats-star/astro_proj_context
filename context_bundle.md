@@ -1,20 +1,20 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-12 14:34:52Z UTC**
-- Commit: `3f21c3089827cddf9c5148b504c6aaca169d39c3`
+- Generated: **2025-08-23 17:12:13Z UTC**
+- Commit: `e23ccab1a3392d34bb8a4f3916afdf25ad9c83b4`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
 
 
 1. [api_routes.py](#api_routespy)
-2. [analysis_engine.py](#analysis_enginepy)
-3. [astrological_evaluator.py](#astrological_evaluatorpy)
-4. [ashtakavarga_engine.py](#ashtakavarga_enginepy)
-5. [rohini_engine.py](#rohini_enginepy)
-6. [orchestration_engine.py](#orchestration_enginepy)
-7. [astrological_constants.py](#astrological_constantspy)
+2. [models.py](#modelspy)
+3. [/home/runner/work/astro_proj/astro_proj/engines/analysis_engine.py](#homerunnerworkastro_projastro_projenginesanalysis_enginepy)
+4. [/home/runner/work/astro_proj/astro_proj/engines/astrological_evaluator.py](#homerunnerworkastro_projastro_projenginesastrological_evaluatorpy)
+5. [/home/runner/work/astro_proj/astro_proj/engines/rohini_engine.py](#homerunnerworkastro_projastro_projenginesrohini_enginepy)
+6. [/home/runner/work/astro_proj/astro_proj/engines/orchestration_engine.py](#homerunnerworkastro_projastro_projenginesorchestration_enginepy)
+7. [/home/runner/work/astro_proj/astro_proj/engines/astrological_constants.py](#homerunnerworkastro_projastro_projenginesastrological_constantspy)
 8. [db_utils.py](#db_utilspy)
 9. [multilingual_strings.py](#multilingual_stringspy)
 10. [database_schema.md](#database_schemamd)
@@ -27,53 +27,684 @@
 
 
 ```python
-from flask import Blueprint, jsonify, request
-from rohini_engine import generate_full_kundli
-from extensions import db
-from models import UserChart
+from flask import Blueprint, request, jsonify
+from models import UserChart, db, PanchangaCache, ChartCache
+from datetime import datetime
+from engines.panchang_engine import get_panchanga
+from engines.rohini_engine import generate_full_kundli
+from api.schemas import parse_kundli_request, ValidationError, PanchangaQuery
+from sqlalchemy.exc import SQLAlchemyError
+from werkzeug.exceptions import HTTPException
+import logging
 
-api_bp = Blueprint('api', __name__)
+api_bp = Blueprint("api", __name__)
 
-@api_bp.route('/kundli/generate', methods=['POST'])
+@api_bp.route("/api/kundli/generate", methods=["POST"])
 def generate_kundli():
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Invalid JSON payload"}), 400
-
     try:
-        kundli_data = generate_full_kundli(data)
+        data = parse_kundli_request(request.get_json())
 
-        # Create a new UserChart instance and save to DB
-        user_chart = UserChart(
-            user_id=data.get('user_id', 1),  # Placeholder user_id
-            birth_data=data,
-            chart_json=kundli_data
+        existing = ChartCache.query.filter_by(
+            birth_datetime=data["birth_datetime"],
+            tz=data["tz"],
+            lat=data["lat"],
+            lon=data["lon"]
+        ).first()
+
+        if existing:
+            return jsonify({"ok": True, "from_cache": True, "chart": existing.chart_json})
+
+        chart_data = generate_full_kundli({
+            'timezone_str': timezone,
+            'year': dt.year,
+            'month': dt.month,
+            'day': dt.day,
+            'hour': dt.hour,
+            'minute': dt.minute,
+            'second': dt.second,
+            'latitude': lat,
+            'longitude': lon
+        })
+
+        cache = ChartCache(
+            birth_datetime=data["birth_datetime"],
+            tz=data["tz"],
+            lat=data["lat"],
+            lon=data["lon"],
+            chart_json=chart_data
         )
-        db.session.add(user_chart)
+        db.session.add(cache)
         db.session.commit()
 
-        return jsonify(kundli_data)
+        return jsonify({"ok": True, "from_cache": False, "chart": chart_data})
+
+    except ValidationError as ve:
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "validation_error",
+                "message": str(ve)
+            }
+        }), 400
+
+    except SQLAlchemyError as se:
+        db.session.rollback()
+        logging.exception("Database error while generating kundli")
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "database_error",
+                "message": str(se)
+            }
+        }), 500
+
     except Exception as e:
-        db.session.rollback() # Rollback in case of error
-        return jsonify({"error": str(e)}), 500
+        logging.exception("Error generating kundli")
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "internal_error",
+                "message": "Unexpected error occurred."
+            }
+        }), 500
+
+@api_bp.route("/api/panchanga")
+def panchanga():
+    try:
+        q = PanchangaQuery(**request.args)
+
+        existing = PanchangaCache.query.filter_by(
+            date=q.date,
+            tz=q.tz,
+            lat=q.lat,
+            lon=q.lon
+        ).first()
+
+        if existing:
+            return jsonify({"ok": True, "panchanga": {**existing.result, "debug": {"from_cache": True}}, "query": request.args})
+
+        result = get_panchanga(q.date, q.tz, q.lat, q.lon)
+
+        db.session.add(PanchangaCache(
+            date=q.date,
+            tz=q.tz,
+            lat=q.lat,
+            lon=q.lon,
+            result=result
+        ))
+        db.session.commit()
+
+        return jsonify({"ok": True, "panchanga": {**result, "debug": {"from_cache": False}}, "query": request.args})
+
+    except ValidationError as ve:
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "validation_error",
+                "message": str(ve)
+            }
+        }), 400
+
+    except SQLAlchemyError as se:
+        db.session.rollback()
+        logging.exception("Database error in /api/panchanga")
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "database_error",
+                "message": str(se)
+            }
+        }), 500
+
+    except Exception as e:
+        logging.exception("Unhandled error in /api/panchanga")
+        return jsonify({
+            "ok": False,
+            "error": {
+                "type": "internal_error",
+                "message": "Unexpected error occurred."
+            }
+        }), 500
+
+@api_bp.route("/health")
+def health():
+    return jsonify({"ok": True, "status": "healthy"})
+
+def register_error_handlers(app):
+    from flask import jsonify
+    from werkzeug.exceptions import HTTPException
+
+    @app.errorhandler(HTTPException)
+    def handle_http_exception(e):
+        response = e.get_response()
+        response.data = jsonify({
+            "ok": False,
+            "error": {
+                "code": e.code,
+                "name": e.name,
+                "description": e.description
+            }
+        }).data
+        response.content_type = "application/json"
+        return response
+
+    @app.errorhandler(Exception)
+    def handle_generic_exception(e):
+        import traceback
+        return jsonify({
+            "ok": False,
+            "error": {
+                "code": 500,
+                "name": "Internal Server Error",
+                "description": str(e),
+                "trace": traceback.format_exc()
+            }
+        }), 500
+
+
+__all__ = ["api_bp", "register_error_handlers"]
+
+
 ```
 
-### analysis_engine.py
+### models.py
+
+
+```python
+from extensions import db
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSON
+from datetime import datetime, timezone
+from extensions import db
+from werkzeug.security import generate_password_hash, check_password_hash
+from sqlalchemy.sql import func
+from dotenv import load_dotenv
+load_dotenv()
+
+
+
+class User(db.Model):
+    __tablename__ = "user"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    # Optional email
+    email = db.Column(db.String, unique=True, nullable=True)
+
+    # New fields for mobile authentication
+    mobile_number = db.Column(db.String(15), unique=True, nullable=False)
+    is_mobile_verified = db.Column(db.Boolean, default=False, nullable=False)
+
+    # Optional: track source of auth
+    auth_provider = db.Column(db.String(50), default="firebase", nullable=False)
+
+    full_name = db.Column(db.String, nullable=True)
+
+    def __repr__(self):
+        return f"<User {self.id}>"
+
+class SocialPost(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    source_platform = db.Column(db.String(50), nullable=False)
+    unique_post_id = db.Column(db.String(255), unique=True, nullable=False)
+    direct_url = db.Column(db.String(500), nullable=False)
+    author = db.Column(db.String(100), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    image_url = db.Column(db.String(500), nullable=True)
+    original_timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    analysis_status = db.Column(db.String(50), default='pending', nullable=False)
+    sentiment = db.Column(db.String(50), nullable=True)
+
+    def __repr__(self):
+        return f"<SocialPost {self.unique_post_id}>"
+
+class PanchangaCache(db.Model):
+    __tablename__ = "panchanga_cache"
+    id = db.Column(db.Integer, primary_key=True)
+    date = db.Column(db.String, nullable=False)
+    tz = db.Column(db.String, nullable=False)
+    lat = db.Column(db.Float, nullable=False)
+    lon = db.Column(db.Float, nullable=False)
+    result = db.Column(db.JSON, nullable=False)
+
+    __table_args__ = (
+        db.UniqueConstraint('date', 'tz', 'lat', 'lon', name='uq_panchanga_cache'),
+    )
+
+class Keyword(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    term = db.Column(db.String(100), unique=True, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+
+    def __repr__(self):
+        return f"<Keyword {self.term}>"
+
+class DataSource(db.Model):
+    __tablename__ = 'data_source'
+    id = db.Column(db.Integer, primary_key=True)
+    platform = db.Column(db.String(50), nullable=False)
+    identifier = db.Column(db.String(255), unique=True, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+
+    def __repr__(self):
+        return f"<DataSource {self.platform}:{self.identifier}>"
+
+class Video(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    video_id = db.Column(db.String(120), unique=True, nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    channel_id = db.Column(db.String(120), nullable=False)
+    published_at = db.Column(db.DateTime, nullable=False)
+    status = db.Column(db.String(50), default='pending', nullable=False)
+
+import uuid
+
+class UserChart(db.Model):
+    __tablename__ = "user_chart"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+
+    # Columns that exist in your Supabase table:
+    birth_data = db.Column(JSONB, nullable=False)
+    chart_json = db.Column(JSONB, nullable=False)
+
+    # Task 7: presence bitset + registry/config version fingerprint
+    chart_version_hash = db.Column(db.String(128), nullable=True)
+    feature_presence_bits = db.Column(db.LargeBinary(), nullable=True)
+
+    def __repr__(self):
+        return f"<UserChart {self.id} for User {self.user_id}>"
+
+class AdminUser(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128), nullable=False)
+    role = db.Column(db.String(50), nullable=False, default='admin')
+    permissions = db.Column(db.String(255), nullable=False, default='all')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+    def __repr__(self):
+        return f'<AdminUser {self.email}>'
+
+class AstrologerProfile(db.Model):
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4())) # UUID for PK
+    user_chart_id = db.Column(db.Integer, db.ForeignKey('user_chart.id'), nullable=False, unique=True)
+    bio = db.Column(db.Text, nullable=True)
+    specializations = db.Column(db.ARRAY(db.String), nullable=True) # Text array
+    consultation_fee = db.Column(db.Numeric, nullable=True)
+    availability = db.Column(db.JSON, nullable=True) # JSONB
+    status = db.Column(db.String(50), default='active', nullable=False)
+
+    def __repr__(self):
+        return f'<AstrologerProfile {self.user_id}>'
+
+class AstrologerApplication(db.Model):
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4())) # UUID for PK
+    user_chart_id = db.Column(db.Integer, db.ForeignKey('user_chart.id'), nullable=False, unique=True)
+    application_data = db.Column(db.JSON, nullable=False) # JSONB
+    status = db.Column(db.String(50), default='pending', nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    def __repr__(self):
+        return f'<AstrologerApplication {self.user_id}>'
+
+class ConsultationHistory(db.Model):
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4())) # UUID for PK
+    astrologer_id = db.Column(db.String(36), db.ForeignKey('astrologer_profile.id'), nullable=False)
+    client_user_chart_id = db.Column(db.Integer, db.ForeignKey('user_chart.id'), nullable=False)
+    date = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    duration = db.Column(db.Integer, nullable=False) # in minutes
+    total_fee = db.Column(db.Numeric, nullable=False)
+    platform_commission = db.Column(db.Numeric, nullable=False)
+    astrologer_payout = db.Column(db.Numeric, nullable=False)
+
+    def __repr__(self):
+        return f'<ConsultationHistory {self.id}>'
+
+class KnowledgeBaseSystems(db.Model):
+    __tablename__ = 'knowledge_base_systems'
+    system_name = db.Column(db.String(255), primary_key=True)
+    data_en = db.Column(JSONB, nullable=False)
+    data_hi = db.Column(JSONB, nullable=False)
+    data_hinglish = db.Column(JSONB, nullable=False)
+
+    def __repr__(self):
+        return f'<KnowledgeBaseSystems {self.system_name}>'
+
+class KnowledgeBaseInterpretations(db.Model):
+    __tablename__ = 'knowledge_base_interpretations'
+    category = db.Column(db.Text, nullable=False)
+    key = db.Column(db.Text, nullable=False)
+    data_en = db.Column(JSONB, nullable=False)
+    data_hi = db.Column(JSONB, nullable=False)
+    data_hinglish = db.Column(JSONB, nullable=False)
+
+    __table_args__ = (db.PrimaryKeyConstraint('category', 'key', name='pk_knowledge_base_interpretations'),)
+
+    def __repr__(self):
+        return f'<KnowledgeBaseInterpretations {self.category} - {self.key}>'
+
+class LLMPrompts(db.Model):
+    __tablename__ = 'llm_prompts'
+    prompt_id = db.Column(db.String(255), primary_key=True)
+    trigger_type = db.Column(db.Text, nullable=False)
+    template_en = db.Column(db.Text, nullable=False)
+    template_hi = db.Column(db.Text, nullable=False)
+    template_hinglish = db.Column(db.Text, nullable=False)
+
+    def __repr__(self):
+        return f'<LLMPrompts {self.prompt_id}>'
+
+class ChartCache(db.Model):
+    __tablename__ = "chart_cache"
+    __table_args__ = (db.UniqueConstraint("birth_datetime", "tz", "lat", "lon", name="uq_chart_cache"),)
+
+    id = db.Column(db.Integer, primary_key=True)
+    birth_datetime = db.Column(db.DateTime, nullable=False)
+    tz = db.Column(db.String, nullable=False)
+    lat = db.Column(db.Float, nullable=False)
+    lon = db.Column(db.Float, nullable=False)
+    chart_json = db.Column(db.JSON, nullable=False)
+    created_at = db.Column(db.DateTime, server_default=func.now())
+
+class AnalysisWeightsConfig(db.Model):
+    __tablename__ = 'analysis_weights_config'
+
+    id = db.Column(db.Integer, primary_key=True)
+    chart_id = db.Column(db.Integer, db.ForeignKey('user_chart.id'), nullable=False)  # 🔧 fix type here
+    weights_json = db.Column(JSON, nullable=True)
+
+    chart = db.relationship("UserChart", backref="analysis_weights_config")
+
+class BriefTemplate(db.Model):
+    __tablename__ = 'brief_templates'
+
+    id = db.Column(db.String, primary_key=True)  # e.g. MUHURTA_BUSINESS_START_V1
+    title = db.Column(db.String, nullable=True)  # ✅ NEW: Add title
+    category = db.Column(db.String, nullable=False)  # e.g. muhurta.business_start
+    intents = db.Column(JSONB, nullable=False)  # e.g. ["muhurta_query"]
+    time_windows = db.Column(JSONB, nullable=False)  # e.g. ["next_7_days"]
+    patterns = db.Column(JSONB, nullable=False)  # per locale matchers
+    signals = db.Column(JSONB, nullable=True)  # {"needs_chart": true, ...}
+    data_requirements = db.Column(JSONB, nullable=True)  # e.g. ["birth_data"]
+    scoring = db.Column(JSONB, nullable=True)  # weights, decay config
+    llm_prompt_key = db.Column(db.String, nullable=True)
+    rules = db.Column(JSONB, nullable=True)  # NEW: rules for extracting chart conditions
+    brief_schema = db.Column(JSONB, nullable=False)  # structured draft layout
+    version = db.Column(db.String, default="v1.0.0")
+    last_updated = db.Column(db.DateTime, default=datetime.now(timezone.utc), nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+
+    def __repr__(self):
+        return f'<BriefTemplate {self.id}>'
+
+class BriefTemplateVariant(db.Model):
+    __tablename__ = "brief_template_variants"
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    template_id = db.Column(
+        db.String,
+        db.ForeignKey("brief_templates.id", ondelete="CASCADE"),
+        nullable=False
+    )
+    name = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    order = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    template = db.relationship("BriefTemplate", backref="variants")
+
+    def __repr__(self):
+        return f"<BriefTemplateVariant {self.id} for Template {self.template_id}>"
+
+class BriefVariantCheck(db.Model):
+    __tablename__ = "brief_variant_checks"
+    __table_args__ = (
+        db.UniqueConstraint("variant_id", "check_key", name="uq_bvc_variant_check"),
+    )
+
+    id = db.Column(db.String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    variant_id = db.Column(
+        db.String,
+        db.ForeignKey("brief_template_variants.id", ondelete="CASCADE"),
+        nullable=False
+    )
+    check_key = db.Column(db.String(255), nullable=False)  # e.g., "double_transit_10th"
+    check_config = db.Column(JSONB, nullable=True)         # parameters / weights / expr
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    variant = db.relationship("BriefTemplateVariant", backref="checks")
+
+    def __repr__(self):
+        return f"<BriefVariantCheck {self.check_key} for Variant {self.variant_id}>"
+
+
+
+class BriefProvenanceLog(db.Model):
+    __tablename__ = "brief_provenance_logs"
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    user_id = db.Column(db.BigInteger, nullable=True)
+    template_id = db.Column(db.String, nullable=False, index=True)
+    matched_by = db.Column(db.String, nullable=False)   # 'pattern' | 'embedding' | 'llm'
+    score = db.Column(db.Float, nullable=False)
+    locale = db.Column(db.String, nullable=True)
+    inputs_hash = db.Column(db.String, nullable=True)
+    trigger = db.Column(db.String, nullable=True)       # 'user_query', 'scheduled', etc.
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    # NEW: for reproducibility/traceability of which config was used
+    ruleset_version = db.Column(db.String, nullable=True)  # copy from BriefTemplate.version at run time
+    routing_snapshot = db.Column(JSONB, nullable=True)     # topK, cues fired, raw scores, etc.
+
+# For standalone scripts like seeders
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine
+import os
+from sqlalchemy.engine.url import make_url
+
+database_url = os.getenv("DATABASE_URL")
+if not database_url:
+    raise ValueError("DATABASE_URL not found in environment")
+    
+engine = create_engine(make_url(database_url))
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+db_session = SessionLocal()
+
+
+```
+
+### /home/runner/work/astro_proj/astro_proj/engines/analysis_engine.py
 
 
 ```python
 # analysis_engine.py (core analysis module)
 
 import math
+import os
 from datetime import datetime
-import astrological_constants as ac
-import astrological_evaluator as evaluator
+from types import SimpleNamespace
+
+from engines import astrological_constants as ac
+from engines import astrological_evaluator as evaluator
 import db_utils  # Still needed if you fetch yoga rules from KB
-import rohini_engine  # For transit positions if needed
+from engines import rohini_engine  # For transit positions if needed
+
+# --- Task 7: Resolver (flag-guarded) ---
+from services.feature_resolver import FeatureResolver
+from services.feature_ids import FeatureID
+
 
 # -------------------------------------------------------------------
 # Utils
 # -------------------------------------------------------------------
+
+# --- D9 (Navamsa) helper -----------------------------------------------------
+def _compute_d9_sign_from_longitude(lon: float) -> str | None:
+    """
+    Given a geocentric ecliptic longitude in degrees [0,360),
+    return the Navamsa (D9) sign as a string from ac.SIGNS.
+    Rule:
+      - Each sign (30°) is divided into 9 parts of 3°20' (= 3.333...°).
+      - Starting Navamsa differs by modality:
+          * Movable signs (Aries, Cancer, Libra, Capricorn): start from same sign
+          * Fixed   signs (Taurus, Leo, Scorpio, Aquarius): start from 9th from sign
+          * Dual    signs (Gemini, Virgo, Sagittarius, Pisces): start from 5th from sign
+    """
+    if lon is None:
+        return None
+    lon = lon % 360.0
+    sign_idx = int(lon // 30)               # 0..11
+    deg_in_sign = lon % 30.0
+    nav_idx = int(deg_in_sign // (30.0/9.0))  # 0..8
+
+    # modality offset
+    movable   = {0, 3, 6, 9}          # Aries, Cancer, Libra, Capricorn
+    fixed     = {1, 4, 7, 10}         # Taurus, Leo, Scorpio, Aquarius
+    dual      = {2, 5, 8, 11}         # Gemini, Virgo, Sagittarius, Pisces
+    if sign_idx in movable:
+        start = sign_idx
+    elif sign_idx in fixed:
+        start = (sign_idx + 8) % 12   # 9th from sign
+    else:  # dual
+        start = (sign_idx + 4) % 12   # 5th from sign
+
+    d9_idx = (start + nav_idx) % 12
+    return ac.SIGNS[d9_idx]
+
+
+# NEW: ensure houses & basics exist for all planets (whole-sign houses)
+def _ensure_houses_and_min_basics(user_chart):
+    # Whole-sign houses from Asc sign; compute minimal dignity/status fallbacks
+    asc_sign = user_chart.get("ascendant", {}).get("sign")
+    if not asc_sign:
+        return user_chart
+    try:
+        asc_idx = ac.SIGNS.index(asc_sign)
+    except ValueError:
+        return user_chart
+
+    planets = user_chart.setdefault("planets", {})
+    for name, pdata in planets.items():
+        sign = pdata.get("sign")
+
+        # House (whole-sign) if missing
+        if "house" not in pdata and sign in ac.SIGNS:
+            p_idx = ac.SIGNS.index(sign)
+            pdata["house"] = ((p_idx - asc_idx) % 12) + 1
+
+        # D9 (Navamsa) sign if missing and we have longitude
+        if "d9_sign" not in pdata and pdata.get("longitude") is not None:
+            d9 = _compute_d9_sign_from_longitude(pdata["longitude"])
+            if d9:
+                pdata["d9_sign"] = d9
+
+        # Dignity minimal fallback if missing (skip nodes)
+        if name not in ("rahu", "ketu") and "dignity" not in pdata and sign in ac.SIGNS:
+            try:
+                pdata["dignity"] = rohini_engine.get_planet_dignity(name, sign)
+            except Exception:
+                pdata["dignity"] = "Neutral Sign"
+
+        # Status fallback so downstream string tests don't crash
+        pdata.setdefault("status", "")
+
+    return user_chart
+
+
+def _resolver_enabled():
+    # Lazy read, so you can toggle per shell
+    return os.getenv("FEATURE_RESOLVER_ENABLED", "0") == "1"
+
+def _analysis_enrich_with_resolver(user_chart: dict) -> dict:
+    """
+    Opportunistically ensure core features exist in user_chart using the Task 7 resolver.
+    Purely in-memory. No DB writes here.
+    """
+    if not _resolver_enabled():
+        return user_chart
+
+    try:
+        row = SimpleNamespace(
+            chart_json=user_chart,
+            birth_data=user_chart.get("birth_data"),
+            feature_presence_bits=None,
+            chart_version_hash=None,
+        )
+        res = FeatureResolver(row)
+        vals = res.get_features([
+            # Asc
+            FeatureID.ASC_LONGITUDE, FeatureID.ASC_SIGN,
+            # Sun & Moon essentials
+            FeatureID.SUN_LONGITUDE, FeatureID.SUN_SIGN,
+            FeatureID.MOON_LONGITUDE, FeatureID.MOON_SIGN,
+            FeatureID.MOON_NAKSHATRA, FeatureID.MOON_PADA,
+            # Mars → Saturn
+            FeatureID.MARS_LONGITUDE, FeatureID.MARS_SIGN,
+            FeatureID.MERCURY_LONGITUDE, FeatureID.MERCURY_SIGN,
+            FeatureID.JUPITER_LONGITUDE, FeatureID.JUPITER_SIGN,
+            FeatureID.VENUS_LONGITUDE, FeatureID.VENUS_SIGN,
+            FeatureID.SATURN_LONGITUDE, FeatureID.SATURN_SIGN,
+            # Rahu/Ketu
+            FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN,
+            FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN,
+        ])
+
+        # Populate the chart only where missing
+        asc = user_chart.setdefault("ascendant", {})
+        if asc.get("longitude") is None and vals.get(FeatureID.ASC_LONGITUDE) is not None:
+            asc["longitude"] = vals[FeatureID.ASC_LONGITUDE]
+        if asc.get("sign") is None and vals.get(FeatureID.ASC_SIGN) is not None:
+            asc["sign"] = vals[FeatureID.ASC_SIGN]
+
+        planets = user_chart.setdefault("planets", {})
+        def _put(pname, fid_lon, fid_sign):
+            node = planets.setdefault(pname, {})
+            if node.get("longitude") is None and vals.get(fid_lon) is not None:
+                node["longitude"] = vals[fid_lon]
+            if node.get("sign") is None and vals.get(fid_sign) is not None:
+                node["sign"] = vals[fid_sign]
+
+        _put("sun",     FeatureID.SUN_LONGITUDE,     FeatureID.SUN_SIGN)
+        _put("moon",    FeatureID.MOON_LONGITUDE,    FeatureID.MOON_SIGN)
+        _put("mars",    FeatureID.MARS_LONGITUDE,    FeatureID.MARS_SIGN)
+        _put("mercury", FeatureID.MERCURY_LONGITUDE, FeatureID.MERCURY_SIGN)
+        _put("jupiter", FeatureID.JUPITER_LONGITUDE, FeatureID.JUPITER_SIGN)
+        _put("venus",   FeatureID.VENUS_LONGITUDE,   FeatureID.VENUS_SIGN)
+        _put("saturn",  FeatureID.SATURN_LONGITUDE,  FeatureID.SATURN_SIGN)
+        _put("rahu",    FeatureID.RAHU_LONGITUDE,    FeatureID.RAHU_SIGN)
+        _put("ketu",    FeatureID.KETU_LONGITUDE,    FeatureID.KETU_SIGN)
+
+        # Moon extras (nakshatra/pada)
+        moon = planets.setdefault("moon", {})
+        if moon.get("nakshatra") is None and vals.get(FeatureID.MOON_NAKSHATRA) is not None:
+            moon["nakshatra"] = vals[FeatureID.MOON_NAKSHATRA]
+        if moon.get("pada") is None and vals.get(FeatureID.MOON_PADA) is not None:
+            moon["pada"] = vals[FeatureID.MOON_PADA]
+
+    except Exception as e:
+        print(f"[Resolver][analysis] enrichment skipped: {e}")
+
+    return user_chart
+
+
+# Safe date parse
+def _safe_parse_date(s: str):
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
 
 def _norm_angle(lon: float) -> float:
     return lon % 360.0
@@ -128,55 +759,101 @@ def get_avakahada_chakra(natal_chart):
 def get_planet_avasthas(planet_name, natal_chart):
     """
     Baladi & Deeptadi Avasthas for a planet.
+    Tolerant to missing 'sign' / 'dignity' by computing from longitude/sign.
     """
     if planet_name in ["rahu", "ketu"]:
         return {"baladi": "n/a", "deeptadi": "n/a"}
+
     p = natal_chart['planets'][planet_name]
-    sign_type = "odd" if (ac.SIGNS.index(p['sign']) + 1) % 2 != 0 else "even"
-    degree_in_sign = p['longitude'] % 30
-    baladi = next((state for state, start, end in ac.BALADI_AVASTHA_RANGES[sign_type] if start <= degree_in_sign < end), "unknown")
+
+    # Ensure we have sign; derive from longitude if missing
+    sign = p.get("sign")
+    if not sign and p.get("longitude") is not None:
+        sign = ac.SIGNS[int((p["longitude"] % 360) // 30)]
+
+    # Pick odd/even safely
+    if sign in ac.SIGNS:
+        sign_type = "odd" if ((ac.SIGNS.index(sign) + 1) % 2 != 0) else "even"
+    else:
+        sign_type = "odd"  # harmless fallback
+
+    # Degree within sign (0–30) if we have longitude
+    deg = p.get("longitude")
+    degree_in_sign = (deg % 30) if deg is not None else 0.0
+
+    # Baladi avastha from degree and sign parity
+    baladi = next(
+        (state for state, start, end in ac.BALADI_AVASTHA_RANGES[sign_type] if start <= degree_in_sign < end),
+        "unknown",
+    )
+
+    # Deeptadi: compute dignity on the fly if missing
     deeptadi_map = {
         "Exaltation": "deepta",
         "Own Sign": "svastha",
         "Friendly Sign": "pramudita",
         "Neutral Sign": "shanta",
         "Enemy Sign": "duhkhita",
+        "Debilitation": "duhkhita",
     }
-    deeptadi = deeptadi_map.get(p['dignity'], "unknown")
+    dign = p.get("dignity")
+    if not dign and sign:
+        # use the engine’s dignity function (lowercase planet name expected)
+        try:
+            dign = rohini_engine.get_planet_dignity(planet_name.lower(), sign)
+        except Exception:
+            dign = "Neutral Sign"
+
+    deeptadi = deeptadi_map.get(dign or "Neutral Sign", "shanta")
     return {"baladi": baladi, "deeptadi": deeptadi}
 
 def get_lajjitaadi_avasthas(planet_name, kundli):
     """
     Lajjitaadi Avasthas via conjunctions/dignity.
+    Robust to missing 'dignity' in the input.
     """
     if planet_name in ["rahu", "ketu"]:
         return "n/a"
 
     p = kundli['planets'][planet_name]
-    house = p['house']
+    house = p.get('house')
 
-    # Garvita (Proud)
-    if p['dignity'] in ["Exaltation", "Moolatrikona"]:
+    # Ensure dignity; compute if absent
+    dign = p.get("dignity")
+    if not dign:
+        sign = p.get("sign")
+        if not sign and p.get("longitude") is not None:
+            sign = ac.SIGNS[int((p["longitude"] % 360) // 30)]
+        if sign:
+            try:
+                dign = rohini_engine.get_planet_dignity(planet_name.lower(), sign)
+            except Exception:
+                dign = "Neutral Sign"
+        else:
+            dign = "Neutral Sign"
+
+    # Garvita (exalted or own sign)
+    if dign in ["Exaltation", "Own Sign"]:
         return "garvita"
 
-    others = [n for n, d in kundli['planets'].items() if d['house'] == house and n != planet_name]
+    others = [n for n, d in kundli.get('planets', {}).items() if d.get('house') == house and n != planet_name]
 
     # Lajjita (5th + malefic present)
     if house == 5 and any(q in ["sun", "saturn", "mars", "rahu", "ketu"] for q in others):
         return "lajjita"
 
     # Mudita (with Jupiter or Friendly Sign)
-    if 'jupiter' in others or p['dignity'] == "Friendly Sign":
+    if 'jupiter' in others or dign == "Friendly Sign":
         return "mudita"
 
     # Kshobhita (with Sun and malefic aspect)
     if 'sun' in others:
-        aspects = evaluator.get_aspects_on_house(house, kundli)
-        if any(q in aspects for q in ["saturn", "mars", "rahu"]):
+        aspects = evaluator.get_aspects(kundli, planet_name) if hasattr(evaluator, "get_aspects") else []
+        if any(a.get("type") == "malefic" for a in aspects):
             return "kshobhita"
 
     # Kshudhita (with Saturn or Enemy Sign)
-    if 'saturn' in others or p['dignity'] == "Enemy Sign":
+    if 'saturn' in others or dign == "Enemy Sign":
         return "kshudhita"
 
     return "shanta"
@@ -185,59 +862,68 @@ def get_lajjitaadi_avasthas(planet_name, kundli):
 # Planetary Data Consolidation
 # -------------------------------------------------------------------
 
+
 def get_all_planetary_data(user_chart):
+    """
+    Builds per-planet packets used across analysis. Tolerant to missing fields.
+    """
     planetary_findings = []
 
-    for pname, pdata in user_chart['planets'].items():
+    planets = user_chart.get("planets", {})
+    for pname, pdata in planets.items():
+        # Base packet
+        sign   = pdata.get("sign")
+        house  = pdata.get("house")
+        degree = pdata.get("longitude")
+
         finding = {
-            "type": "planetary_position",
-            "name": f"{pname.capitalize()} Position",
-            "key": f"{pname}_position",
-            "relevant_planet": pname,
-            "relevant_house": pdata['house'],
-            "details": pdata.copy(),
+            "feature_type": "planet_position",
+            "planet": pname,
+            "sign": sign if sign is not None else "unknown",
+            "house": house if house is not None else "unknown",
+            "degree": degree if degree is not None else "unknown",
+            "details": {},
+            "meta": {"source": "get_all_planetary_data"},
         }
+
+        # Dignity / status
+        finding["details"]["dignity"] = pdata.get("dignity", "N/A")
+        finding["details"]["status"]  = pdata.get("status",  "N/A")
 
         # Avasthas
         av = get_planet_avasthas(pname, user_chart)
-        finding['details']['baladi_avastha'] = av.get('baladi')
-        finding['details']['deeptadi_avastha'] = av.get('deeptadi')
-        finding['details']['lajjitaadi_avastha'] = get_lajjitaadi_avasthas(pname, user_chart)
+        finding["details"]["baladi_avastha"]  = av.get("baladi")
+        finding["details"]["deeptadi_avastha"] = av.get("deeptadi")
 
-        # Positional Strength (prefer sidereal cusps)
-        cusps = user_chart.get('house_cusps_sidereal') or user_chart.get('house_cusps')
-        pos = evaluator.evaluate_planetary_positional_strength(pdata['longitude'], pdata['house'], cusps)
-        finding['details']['bhava_positional_strength'] = pos.get('status')
+        # Positional strength (only if we have the inputs)
+        cusps = user_chart.get("house_cusps_sidereal") or user_chart.get("house_cusps")
+        if cusps and degree is not None and house:
+            pos = evaluator.evaluate_planetary_positional_strength(degree, house, cusps)
+            finding["details"]["bhava_positional_strength"] = pos.get("status")
 
-        # Bhavesha Strength Summary
-        finding['details']['bhavesha_strength_summary'] = evaluator.evaluate_bhavesha_strength(user_chart, pdata['house'])
-
-        # Shadbala total
-        finding['details']['shadbala_total'] = pdata.get('shadbala', {}).get('total')
+        # Bhavesha summary (only if we have house)
+        if house:
+            finding["details"]["bhavesha_strength_summary"] = evaluator.evaluate_bhavesha_strength(user_chart, house)
 
         # Sarvashtakavarga bindus for the planet's sign
-        sav = user_chart.get('ashtakavarga_scores', {}).get('sarvashtakavarga', {})
-        finding['details']['sarvashtakavarga_score_for_house'] = sav.get(pdata['sign'], 0)
+        sav = user_chart.get("ashtakavarga_scores", {}).get("sarvashtakavarga", {})
+        finding["details"]["sarvashtakavarga_score_for_house"] = sav.get(sign, 0)
 
-        # Vargottama
-        finding['details']['vargottama_status'] = (pdata.get('d9_sign') == pdata.get('sign'))
+        # Vargottama flag
+        finding["details"]["vargottama_status"] = (pdata.get("d9_sign") == sign)
 
-        # Pre-written insight keys (for KB)
-        finding['pre_written_insight_keys'] = [
-            {"category": "graha-", "key": pname},
-            {"category": "graha_in_bhava", "key": f"{pname}_in_{pdata['house']}th_house"},
-            {"category": "graha_in_rashi", "key": f"{pname}_in_{pdata['sign']}"},
-            {"category": "planet_in_navamsa", "key": f"{pname}_in_{pdata['d9_sign']}"},
-            {"category": "planetary_avastha", "key": f"{pname}_baladi_{finding['details']['baladi_avastha']}"} if finding['details'].get('baladi_avastha') != 'n/a' else None,
-            {"category": "planetary_avastha", "key": f"{pname}_deeptadi_{finding['details']['deeptadi_avastha']}"} if finding['details'].get('deeptadi_avastha') != 'n/a' else None,
-            {"category": "planetary_avastha", "key": f"{pname}_lajjitaadi_{finding['details']['lajjitaadi_avastha']}"} if finding['details'].get('lajjitaadi_avastha') != 'n/a' else None,
-            {"category": "planetary_dignity", "key": f"{pname}_{finding['details']['dignity'].lower().replace(' ', '_')}"},
-            {"category": "planetary_status", "key": f"{pname}_{finding['details']['status'].lower().split(' ')[0]}"},
-        ]
-        finding['pre_written_insight_keys'] = [k for k in finding['pre_written_insight_keys'] if k]
+        # Pre-written insight keys (build safely; no dangling brackets)
+        pw = [{"category": "graha-", "key": pname}]
+        if house:
+            pw.append({"category": "graha_in_bhava", "key": f"{pname}_in_{house}th_house"})
+        if sign:
+            pw.append({"category": "graha_in_rashi", "key": f"{pname}_in_{sign}"})
+        finding["pre_written_insight_keys"] = pw
+
         planetary_findings.append(finding)
 
     return planetary_findings
+
 
 # -------------------------------------------------------------------
 # Doshas
@@ -446,7 +1132,8 @@ def identify_all_yogas(user_chart):
             "status": kem['type'],
             "cancellation_reasons": [r for r in kem.get('cancellation_reasons', [])],
             "relevant_planets": ["moon"],
-            "relevant_houses": [user_chart['planets']['moon']['house']],
+            "relevant_houses": [user_chart['planets']['moon'].get('house')],
+
             "pre_written_insight_keys": [
                 {"category": "yoga_interpretation", "key": f"kemadruma_yoga_{kem['type'].lower()}"}
             ] + ([{"category": "kemadruma_cancellation_reasons", "key": r} for r in kem.get('cancellation_reasons', [])] if kem.get('cancellation_reasons') else [])
@@ -454,7 +1141,24 @@ def identify_all_yogas(user_chart):
 
     # Neecha Bhanga Raja Yoga (if any planet debilitated)
     for pname, pdata in user_chart['planets'].items():
-        if pdata['dignity'] == 'Debilitation':
+        # Skip nodes (no dignity defined)
+        if pname in ("rahu", "ketu"):
+            continue
+
+        # Ensure dignity exists; derive if missing
+        dign = pdata.get("dignity")
+        if not dign:
+            sign = pdata.get("sign")
+            if sign in ac.SIGNS:
+                try:
+                    dign = rohini_engine.get_planet_dignity(pname, sign)
+                except Exception:
+                    dign = "Neutral Sign"
+            else:
+                dign = "Neutral Sign"
+            pdata["dignity"] = dign  # cache for downstream users
+
+        if dign == "Debilitation":
             reasons = evaluator.check_neecha_bhanga(pname, user_chart)
             if reasons:
                 yogas_found.append({
@@ -464,15 +1168,16 @@ def identify_all_yogas(user_chart):
                     "is_present": True,
                     "relevant_planet": pname,
                     "cancellation_reasons": [r['key'] for r in reasons],
-                    "relevant_houses": [pdata['house']],
-                    "pre_written_insight_keys": [
-                        {"category": "raja_yoga", "key": "neecha_bhanga_raja_yoga"}
-                    ] + [{"category": "neecha_bhanga_reasons", "key": r['key']} for r in reasons]
+                    "relevant_houses": [pdata.get('house')],
+                    "pre_written_insight_keys": (
+                        [{"category": "raja_yoga", "key": "neecha_bhanga_raja_yoga"}] +
+                        [{"category": "neecha_bhanga_reasons", "key": r['key']} for r in reasons]
+                    )
                 })
 
     # Gajakesari (Moon-Jupiter Kendra)
-    moon_house = user_chart['planets']['moon']['house']
-    jup_house = user_chart['planets']['jupiter']['house']
+    moon_house = user_chart['planets'].get('moon', {}).get('house')
+    jup_house = user_chart['planets'].get('jupiter', {}).get('house')
     if jup_house in [(moon_house + i - 1) % 12 + 1 for i in [1, 4, 7, 10]]:
         yogas_found.append({
             "type": "yoga",
@@ -630,33 +1335,99 @@ def analyze_transits(natal_chart, transit_positions, ashtakavarga_scores):
     return analysis
 
 def analyze_dasha_gochar_synthesis(natal_chart, transit_positions):
+    """
+    Return the current MD/AD finding if we can identify it from either:
+    - vimshottari_dasha: [{ start_date, end_date, dasha_lord, antardashas: [{ start_date, end_date, antardasha_lord }] }]
+    - active_dasha:      [{ start_date, end_date, dasha_lord|mahadasha_lord, antardasha_lord|bhukti_lord }]
+    If dates/keys are missing, skip that segment instead of crashing.
+    """
     findings = []
     today = datetime.now().date()
-    for md in natal_chart.get('vimshottari_dasha', []):
-        md_start = datetime.strptime(md['start_date'], "%Y-%m-%d").date()
-        md_end = datetime.strptime(md['end_date'], "%Y-%m-%d").date()
-        if md_start <= today <= md_end:
-            md_lord = md['dasha_lord']
-            for ad in md.get('antardashas', []):
-                ad_start = datetime.strptime(ad['start_date'], "%Y-%m-%d").date()
-                ad_end = datetime.strptime(ad['end_date'], "%Y-%m-%d").date()
-                if ad_start <= today <= ad_end:
-                    ad_lord = ad['antardasha_lord']
-                    findings.append({
-                        "type": "dasha",
-                        "name": "Current Dasha Period",
-                        "key": f"{md_lord}_mahadasha_{ad_lord}_antardasha",
-                        "mahadasha_lord": md_lord,
-                        "antardasha_lord": ad_lord,
-                        "start_date": ad_start.strftime("%Y-%m-%d"),
-                        "end_date": ad_end.strftime("%Y-%m-%d"),
-                        "pre_written_insight_keys": [
-                            {"category": "mahadasha_interpretation", "key": md_lord},
-                            {"category": "antardasha_interpretation", "key": f"{md_lord}_{ad_lord}"}
-                        ]
-                    })
-                    return findings
-    return [{"type": "dasha", "name": "Current Dasha Period", "key": "dasha_period_not_found", "finding": "Current Dasha period not found.", "pre_written_insight_keys": []}]
+
+    # ---- Path A: nested Vimshottari blocks ----
+    md_blocks = natal_chart.get("vimshottari_dasha") or []
+    if isinstance(md_blocks, list) and md_blocks:
+        for md in md_blocks:
+            md_start = _safe_parse_date(md.get("start_date"))
+            md_end   = _safe_parse_date(md.get("end_date"))
+            if not (md_start and md_end and md_start <= today <= md_end):
+                continue
+
+            md_lord = md.get("dasha_lord") or md.get("mahadasha_lord")
+            # accept antardashas / alternative key names if present
+            ad_blocks = md.get("antardashas") or md.get("antardasha") or md.get("bhukti") or []
+            for ad in ad_blocks:
+                ad_start = _safe_parse_date(ad.get("start_date"))
+                ad_end   = _safe_parse_date(ad.get("end_date"))
+                if not (ad_start and ad_end and ad_start <= today <= ad_end):
+                    continue
+
+                ad_lord = ad.get("antardasha_lord") or ad.get("bhukti_lord")
+                if not (md_lord and ad_lord):
+                    continue
+
+                findings.append({
+                    "type": "dasha",
+                    "name": "Current Dasha Period",
+                    "key": f"{md_lord}_mahadasha_{ad_lord}_antardasha",
+                    "mahadasha_lord": md_lord,
+                    "antardasha_lord": ad_lord,
+                    "start_date": ad_start.strftime("%Y-%m-%d"),
+                    "end_date": ad_end.strftime("%Y-%m-%d"),
+                    "pre_written_insight_keys": [
+                        {"category": "mahadasha_interpretation", "key": md_lord},
+                        {"category": "antardasha_interpretation", "key": f"{md_lord}_{ad_lord}"}
+                    ]
+                })
+                return findings  # first matching window suffices
+
+    # ---- Path B: flat, already-resolved active_dasha blocks ----
+    flat_blocks = natal_chart.get("active_dasha") or []
+    if isinstance(flat_blocks, list) and flat_blocks:
+        for seg in flat_blocks:
+            s = _safe_parse_date(seg.get("start_date"))
+            e = _safe_parse_date(seg.get("end_date"))
+            if not (s and e and s <= today <= e):
+                continue
+            md_lord = seg.get("dasha_lord") or seg.get("mahadasha_lord")
+            ad_lord = seg.get("antardasha_lord") or seg.get("bhukti_lord")
+            if not (md_lord and ad_lord):
+                continue
+            findings.append({
+                "type": "dasha",
+                "name": "Current Dasha Period",
+                "key": f"{md_lord}_mahadasha_{ad_lord}_antardasha",
+                "mahadasha_lord": md_lord,
+                "antardasha_lord": ad_lord,
+                "start_date": s.strftime("%Y-%m-%d"),
+                "end_date": e.strftime("%Y-%m-%d"),
+                "pre_written_insight_keys": [
+                    {"category": "mahadasha_interpretation", "key": md_lord},
+                    {"category": "antardasha_interpretation", "key": f"{md_lord}_{ad_lord}"}
+                ]
+            })
+            return findings
+
+    # Fallback: keep your existing not-found packet
+    return [{
+        "type": "dasha",
+        "name": "Current Dasha Period",
+        "key": "dasha_period_not_found",
+        "finding": "Current Dasha period not found.",
+        "pre_written_insight_keys": []
+    }]
+
+
+def analyze_patterns(kundli):
+    # TODO: Fill in logic for meaningful pattern analysis
+    return {
+        "kemadruma": False,
+        "neecha_bhanga": [],
+        "rasi_aspects": {},
+        "bhavesha_strength": {}
+    }
+
+
 
 # -------------------------------------------------------------------
 # Master Orchestrator
@@ -666,6 +1437,14 @@ def run_all_analysis(user_chart, transit_positions, ashtakavarga_scores, related
     """
     Orchestrates core analysis functions and returns raw findings.
     """
+    # NEW: opportunistic enrichment + computed basics
+    try:
+        # If you already have _analysis_enrich_with_resolver, keep it
+        user_chart = _analysis_enrich_with_resolver(user_chart)  # no-op if not wired
+    except Exception:
+        pass
+    _ensure_houses_and_min_basics(user_chart)
+
     findings = []
     # 1) Planetary packets
     findings.extend(get_all_planetary_data(user_chart))
@@ -690,13 +1469,13 @@ def run_all_analysis(user_chart, transit_positions, ashtakavarga_scores, related
     return findings
 ```
 
-### astrological_evaluator.py
+### /home/runner/work/astro_proj/astro_proj/engines/astrological_evaluator.py
 
 
 ```python
 # astrological_evaluator.py
 
-import astrological_constants as ac
+from engines import astrological_constants as ac
 
 def get_house_lord(user_chart, house_number):
     """Calculates the lord of a given house based on the ascendant sign."""
@@ -901,226 +1680,7 @@ def get_aspects_on_house(target_house, kundli):
     return list(set(aspecting_planets))
 ```
 
-### ashtakavarga_engine.py
-
-
-```python
-# ashtakavarga_engine.py
-# -------------------------------------------------------------------
-# Bhinnashtakavarga (BAV) + Sarvashtakavarga (SAV) for North-Indian Vedic
-# - Uses classical rule matrices (Parashara/Phaladeepika lineage).
-# - Inputs: kundli dict from rohini_engine.generate_full_kundli(...)
-# - Outputs:
-#     {
-#       "bhinnashtakavarga": {
-#          "sun":    {"Aries": x, "Taurus": y, ... "Pisces": z},
-#          "moon":   {...}, ...
-#          "saturn": {...}
-#       },
-#       "sarvashtakavarga": {"Aries": S, ... "Pisces": S}
-#     }
-# Notes:
-#   • Lagna is a *contributor* to each planet’s BAV, but SAV is a sum of the 7
-#     planets only (Sun..Saturn), not Lagna.
-#   • Signs are the 12 whole signs (sidereal, Lahiri), matching your engine.
-# -------------------------------------------------------------------
-
-from typing import Dict, List
-import astrological_constants as ac
-
-SIGNS = ac.SIGNS  # ["Aries", ... "Pisces"]
-
-def _sign_index(sign_name: str) -> int:
-    """0..11 index from sign name."""
-    return SIGNS.index(sign_name)
-
-def _wrap12(n: int) -> int:
-    return ((n - 1) % 12) + 1  # keep 1..12
-
-def _rel_house(from_index: int, to_index: int) -> int:
-    """
-    Relative house number (1..12) of 'to_index' FROM 'from_index'.
-    Example: from Aries(0) to Aries(0) => 1; from Aries(0) to Taurus(1) => 2; ...
-    """
-    return ((to_index - from_index) % 12) + 1
-
-# -------------------------------------------------------------------
-# Classical Bhinnashtakavarga rule matrices
-# Each planet P has a dict: contributor -> set of relative houses (1..12)
-# meaning "P gives a bindu in those houses counted FROM that contributor".
-# Sources cross-checked from Brihat Jataka/Phaladeepika-style lists.
-# -------------------------------------------------------------------
-
-BAV_RULES: Dict[str, Dict[str, set]] = {
-    # --- SUN ---
-    "sun": {
-        "sun":    {1,2,4,7,8,9,10,11},
-        "moon":   {3,6,10,11},
-        "mars":   {1,2,4,7,8,9,10,11},
-        "mercury":{3,5,6,9,10,11,12},
-        "jupiter":{5,6,9,11},
-        "venus":  {6,7,12},
-        "saturn": {1,2,4,7,8,9,10,11},
-        "lagna":  {3,4,6,10,11,12}
-    },
-
-    # --- MOON ---
-    "moon": {
-        "sun":    {3,6,7,8,10,11},
-        "moon":   {1,3,6,7,10,11},
-        "mars":   {2,3,5,6,9,10,11},
-        "mercury":{1,3,4,5,7,8,10,11},
-        "jupiter":{1,4,7,8,10,11,12},
-        "venus":  {3,4,5,7,9,10,11},
-        "saturn": {3,5,6,11},
-        "lagna":  {3,6,10,11}
-    },
-
-    # --- MARS ---
-    "mars": {
-        "sun":    {3,5,6,10,11},
-        "moon":   {3,6,11},
-        "mars":   {1,2,4,7,8,10,11},
-        "mercury":{3,5,6,11},
-        "jupiter":{6,10,11,12},
-        "venus":  {6,8,11,12},
-        "saturn": {10,11},
-        "lagna":  {1,3,6,10,11}
-    },
-
-    # --- MERCURY ---
-    "mercury": {
-        "sun":    {5,6,9,11,12},
-        "moon":   {2,4,6,8,10,11},
-        "mars":   {1,2,4,7,8,9,10,11},
-        "mercury":{1,3,5,6,7,10,11,12},
-        "jupiter":{6,8,11,12},
-        "venus":  {1,2,3,4,5,8,9,11},
-        "saturn": {1,2,4,7,8,9,10,11},
-        "lagna":  {1,2,4,6,8,10,11}
-    },
-
-    # --- JUPITER ---
-    "jupiter": {
-        "sun":    {1,2,3,4,7,8,9,10,11},
-        "moon":   {2,5,7,9,11},
-        "mars":   {1,2,4,7,8,10,11},
-        "mercury":{1,2,4,5,6,9,10,11},
-        "jupiter":{1,2,4,5,6,9,10,11},
-        "venus":  {2,5,6,9,10,11},
-        "saturn": {3,5,6,12},
-        "lagna":  {1,2,4,5,6,7,9,10,11}
-    },
-
-    # --- VENUS ---
-    "venus": {
-        "sun":    {8,11,12},
-        "moon":   {1,2,3,4,5,8,9,11,12},
-        "mars":   {3,5,6,9,11,12},
-        "mercury":{3,5,6,9,11},
-        "jupiter":{5,8,9,10,11},
-        "venus":  {1,2,3,4,5,8,9,10,11},
-        "saturn": {3,4,5,8,9,10,11},
-        "lagna":  {1,2,3,4,5,8,9,11}
-    },
-
-    # --- SATURN ---
-    "saturn": {
-        "sun":    {1,2,4,7,8,10,11},
-        "moon":   {3,6,11},
-        "mars":   {3,5,6,10,11,12},
-        "mercury":{6,8,9,10,11,12},
-        "jupiter":{5,6,11,12},
-        "venus":  {6,11,12},
-        "saturn": {3,5,6,11},   # Saturn does NOT give in its own sign to 8 bindu ever.
-        "lagna":  {1,3,4,6,10,11}
-    },
-}
-
-# -------------------------------------------------------------------
-# Core calculation
-# -------------------------------------------------------------------
-
-def _planet_sign_index(kundli: dict, planet: str) -> int:
-    """Return 0..11 sign index of a planet from kundli['planets'][planet]['sign']."""
-    sign = kundli.get("planets", {}).get(planet, {}).get("sign")
-    return _sign_index(sign) if isinstance(sign, str) else None
-
-def _lagna_sign_index(kundli: dict) -> int:
-    sign = kundli.get("ascendant", {}).get("sign")
-    return _sign_index(sign) if isinstance(sign, str) else None
-
-def _empty_sign_dict() -> Dict[str, int]:
-    return {s: 0 for s in SIGNS}
-
-def calculate_bhinnashtakavarga(kundli: dict) -> Dict[str, Dict[str, int]]:
-    """
-    Compute BAV for each of the 7 planets (Sun..Saturn), returning a dict:
-      { planet: { "Aries": n, ..., "Pisces": n } }
-    Each n ranges 0..8.
-    """
-    # Gather contributor base positions (sign indexes)
-    positions = {
-        "sun":    _planet_sign_index(kundli, "sun"),
-        "moon":   _planet_sign_index(kundli, "moon"),
-        "mars":   _planet_sign_index(kundli, "mars"),
-        "mercury":_planet_sign_index(kundli, "mercury"),
-        "jupiter":_planet_sign_index(kundli, "jupiter"),
-        "venus":  _planet_sign_index(kundli, "venus"),
-        "saturn": _planet_sign_index(kundli, "saturn"),
-        "lagna":  _lagna_sign_index(kundli)
-    }
-
-    bav: Dict[str, Dict[str, int]] = {}
-    # For each planet, walk all 12 signs and sum bindus from contributors
-    for p, rules in BAV_RULES.items():
-        out = _empty_sign_dict()
-        for s_idx, sign_name in enumerate(SIGNS):
-            bindu = 0
-            for contrib, allowed_rel in rules.items():
-                c_idx = positions.get(contrib)
-                if c_idx is None:
-                    continue  # missing data, skip contributor
-                rel = _rel_house(c_idx, s_idx)
-                if rel in allowed_rel:
-                    bindu += 1
-            out[sign_name] = bindu
-        bav[p] = out
-    return bav
-
-def calculate_sarvashtakavarga(bav: Dict[str, Dict[str, int]]) -> Dict[str, int]:
-    """
-    Sum the seven planetary BAVs (Sun..Saturn) sign-wise.
-    Lagna is NOT included in the sum (Lagna only contributes within each planet’s BAV).
-    """
-    sav = _empty_sign_dict()
-    for sign in SIGNS:
-        sav[sign] = (
-            bav["sun"][sign] + bav["moon"][sign] + bav["mars"][sign] +
-            bav["mercury"][sign] + bav["jupiter"][sign] +
-            bav["venus"][sign] + bav["saturn"][sign]
-        )
-    return sav
-
-def calculate_ashtakavarga(kundli: dict) -> Dict[str, dict]:
-    """
-    Public entry used by your generator.
-    Returns:
-      {
-        "bhinnashtakavarga": {planet->{sign->bindu}},
-        "sarvashtakavarga": {sign->total}
-      }
-    """
-    bav = calculate_bhinnashtakavarga(kundli)
-    sav = calculate_sarvashtakavarga(bav)
-    return {
-        "bhinnashtakavarga": bav,
-        "sarvashtakavarga": sav
-    }
-
-```
-
-### rohini_engine.py
+### /home/runner/work/astro_proj/astro_proj/engines/rohini_engine.py
 
 
 ```python
@@ -1141,7 +1701,10 @@ import pytz
 import os
 import swisseph as swe
 import math
-import astrological_constants as ac
+from engines import astrological_constants as ac
+from .ashtakavarga_engine import calculate_ashtakavarga
+
+
 
 # --- Init Swiss Ephemeris ---
 swe.set_ephe_path(os.path.join(os.path.dirname(__file__), 'sweph_data'))
@@ -1193,6 +1756,19 @@ def get_navamsa_sign(longitude):
     ni = ac.NAKSHATRAS.index(nak)
     total = ni * 4 + (pada - 1)
     return SIGNS[total % 12]
+
+def get_dashamsa_sign(longitude):
+    """
+    Dashamsa (D10) sign is calculated by dividing each sign into 10 equal parts of 3° each.
+    Starting sign differs based on whether the sign is odd/even.
+    """
+    lon = _norm_lon(longitude)
+    si = int(lon // 30)  # sign index (0–11)
+    deg_within_sign = lon % 30
+    pada = int(deg_within_sign // 3)
+    start_idx = si if si % 2 == 0 else (si + 8) % 12
+    return SIGNS[(start_idx + pada) % 12]
+
 
 def get_planet_dignity(planet_name, sign):
     # CHANGE: expect lowercase planet_name, lower-case keys in constants
@@ -1577,6 +2153,7 @@ def generate_full_kundli(birth_data):
         if combust:
             tags.append(f"combust ({dist}°)")
         d9 = get_navamsa_sign(data['longitude'])
+        d10 = get_dashamsa_sign(data['longitude'])
         if d9 == sign:
             tags.append("vargottama")
         if name in war_status:
@@ -1590,6 +2167,7 @@ def generate_full_kundli(birth_data):
             "formatted_sign": _format_sign(data['longitude']),
             "sign": sign,
             "d9_sign": d9,
+            "d10_sign": d10,
             "nakshatra": nak,
             "pada": pada,
             "dignity": get_planet_dignity(name, sign),
@@ -1600,28 +2178,237 @@ def generate_full_kundli(birth_data):
     for n in list(kundli["planets"].keys()):
         kundli["planets"][n]["shadbala"] = calculate_shadbala(n, kundli)
 
-    # vimshottari
-    kundli["vimshottari_dasha"] = calculate_vimshottari_dasha(kundli["planets"]["moon"]["longitude"], utc_dt.date())
 
     # CHANGE: Panchang at birth (use LOCAL datetime) + Chandra Lagna chart
+    # Panchang + Chandra Lagna chart (birth-time elements)
     kundli["panchang"] = compute_panchang(kundli, local_dt)
     kundli["chandra_lagna_chart"] = compute_chandra_lagna_chart(kundli)
 
-    return kundli
+    # D9 and D10 varga
+    kundli["vargas"] = {
+        "D9": {k: v.get("d9_sign") for k, v in kundli["planets"].items()},
+        "D10": {k: v.get("d10_sign") for k, v in kundli["planets"].items()}
+    }
 
+    kundli["ashtakavarga_scores"] = calculate_ashtakavarga(kundli)
+
+
+    # vimshottari
+    kundli["vimshottari_dasha"] = calculate_vimshottari_dasha(kundli["planets"]["moon"]["longitude"], utc_dt.date())
+
+
+    return kundli
+# =============================
+# Utility Functions (For Internal Use)
+# =============================
+
+def wrap_angle(degrees: float) -> float:
+    """Wrap an angle between 0 and 360 degrees."""
+    return degrees % 360
+
+def normalize_sign_alias(name: str) -> str:
+    """Normalize common aliases for sign names."""
+    aliases = {
+        "mesha": "aries", "vrisha": "taurus", "mithuna": "gemini",
+        "karka": "cancer", "simha": "leo", "kanya": "virgo",
+        "tula": "libra", "vrishchika": "scorpio", "dhanu": "sagittarius",
+        "makara": "capricorn", "kumbha": "aquarius", "meena": "pisces"
+    }
+    name = name.strip().lower()
+    return aliases.get(name, name)
+
+def deg_to_sign_deg(deg: float) -> (str, float):
+    """Convert absolute degree (0-360) into (sign, degrees in sign)."""
+    wrapped = wrap_angle(deg)
+    sign_index = int(wrapped // 30)
+    sign_name = SIGNS[sign_index]
+    deg_in_sign = wrapped % 30
+    return sign_name, deg_in_sign
+
+def sign_deg_to_deg(sign: str, deg_in_sign: float) -> float:
+    """Convert (sign, degrees in sign) to absolute degree (0-360)."""
+    sign = normalize_sign_alias(sign)
+    if sign not in SIGNS:
+        raise ValueError(f"Unknown sign: {sign}")
+    sign_index = SIGNS.index(sign)
+    return wrap_angle(sign_index * 30 + deg_in_sign)
 ```
 
-### orchestration_engine.py
+### /home/runner/work/astro_proj/astro_proj/engines/orchestration_engine.py
 
 
 ```python
 # orchestration_engine.py (NEW Module: Handles orchestration, weighting, and LLM brief compilation)
 
 import math
+import os
+import time
 from datetime import datetime
-import db_utils # For fetching weights, interpretations, and LLM prompts
-import rohini_engine # For transit positions (called by analysis_engine)
-import analysis_engine # The re-scoped analysis core
+from types import SimpleNamespace
+
+from engines import rohini_engine
+from engines import analysis_engine
+from engines import astrological_evaluator  # if used
+from utils import db_utils  # if db_utils is in utils/
+from services.matching_pipeline import select_template_with_fallbacks
+from services.provenance import record_provenance_from_match
+
+from services.feature_resolver import FeatureResolver
+from services.feature_ids import FeatureID, MAX_FEATURE_ID
+from services.feature_registry import REGISTRY, REGISTRY_HASH
+from services.bitset import Bitset
+from models import UserChart, db
+from services.rules_runtime import evaluate_ruleset_for_chart, RulesPayload
+from services.template_store import TemplateStore
+from services.kb_fetcher import get_insights_for_rules
+
+
+
+def _bits_has_all(bits_hex: str | None, feature_ids: list[int]) -> bool:
+    if not bits_hex:
+        return False
+    try:
+        bs = Bitset.from_hex(bits_hex)
+        return all(bs.has(fid) for fid in feature_ids)
+    except Exception:
+        return False
+
+
+def _feature_resolver_enabled():
+    # Read env at call time so you can toggle in the shell and get it instantly
+    return os.getenv("FEATURE_RESOLVER_ENABLED", "0") == "1"
+
+def _feature_resolver_persist_enabled():
+    # Separate flag for DB persistence; off by default
+    return os.getenv("FEATURE_RESOLVER_PERSIST", "0") == "1"
+
+
+def heal_chart_features_by_id(chart_id: int, feature_ids=None) -> dict:
+    """
+    Loads a UserChart row by id, resolves a small batch of foundational
+    features via the Task 7 resolver, and persists them in one commit
+    (presence bits + version hash + chart_json) if flags are enabled.
+    Returns a summary dict.
+    """
+    if feature_ids is None:
+        feature_ids = [
+            # Asc
+            FeatureID.ASC_LONGITUDE, FeatureID.ASC_SIGN,
+
+            # Sun & Moon core
+            FeatureID.SUN_LONGITUDE, FeatureID.SUN_SIGN,
+            FeatureID.MOON_LONGITUDE, FeatureID.MOON_SIGN,
+            FeatureID.MOON_NAKSHATRA, FeatureID.MOON_PADA,
+
+            # Shadbala totals
+            FeatureID.SHADBALA_SUN_TOTAL, FeatureID.SHADBALA_MOON_TOTAL,
+
+            # Mars → Saturn
+            FeatureID.MARS_LONGITUDE, FeatureID.MARS_SIGN,
+            FeatureID.MERCURY_LONGITUDE, FeatureID.MERCURY_SIGN,
+            FeatureID.JUPITER_LONGITUDE, FeatureID.JUPITER_SIGN,
+            FeatureID.VENUS_LONGITUDE, FeatureID.VENUS_SIGN,
+            FeatureID.SATURN_LONGITUDE, FeatureID.SATURN_SIGN,
+
+            # Rahu/Ketu
+            FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN,
+            FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN,
+
+            # NEW (Step 16): Houses (whole-sign) for classical planets
+            FeatureID.SUN_HOUSE, FeatureID.MOON_HOUSE, FeatureID.MARS_HOUSE,
+            FeatureID.MERCURY_HOUSE, FeatureID.JUPITER_HOUSE, FeatureID.VENUS_HOUSE,
+            FeatureID.SATURN_HOUSE,
+
+            # NEW (Step 16): Dignity for classical planets
+            FeatureID.SUN_DIGNITY, FeatureID.MOON_DIGNITY, FeatureID.MARS_DIGNITY,
+            FeatureID.MERCURY_DIGNITY, FeatureID.JUPITER_DIGNITY, FeatureID.VENUS_DIGNITY,
+            FeatureID.SATURN_DIGNITY,
+            # NEW: D9 signs
+            FeatureID.SUN_D9_SIGN, FeatureID.MOON_D9_SIGN, FeatureID.MARS_D9_SIGN,
+            FeatureID.MERCURY_D9_SIGN, FeatureID.JUPITER_D9_SIGN, FeatureID.VENUS_D9_SIGN,
+            FeatureID.SATURN_D9_SIGN,
+
+            # Node houses
+            FeatureID.RAHU_HOUSE, FeatureID.KETU_HOUSE,
+            # Retro flags
+            FeatureID.MERCURY_RETROGRADE, FeatureID.VENUS_RETROGRADE,
+            FeatureID.MARS_RETROGRADE, FeatureID.JUPITER_RETROGRADE,             FeatureID.SATURN_RETROGRADE,
+
+            # Bundle R2: D10 + D7 + shadbala(Mars–Saturn) + combust(Mercury–Saturn)
+            FeatureID.SUN_D10_SIGN, FeatureID.MOON_D10_SIGN, FeatureID.MARS_D10_SIGN,
+            FeatureID.MERCURY_D10_SIGN, FeatureID.JUPITER_D10_SIGN, FeatureID.VENUS_D10_SIGN,
+            FeatureID.SATURN_D10_SIGN,
+            FeatureID.SUN_D7_SIGN, FeatureID.MOON_D7_SIGN, FeatureID.MARS_D7_SIGN,
+            FeatureID.MERCURY_D7_SIGN, FeatureID.JUPITER_D7_SIGN, FeatureID.VENUS_D7_SIGN,
+            FeatureID.SATURN_D7_SIGN,
+            FeatureID.SHADBALA_MARS_TOTAL, FeatureID.SHADBALA_MERCURY_TOTAL,
+            FeatureID.SHADBALA_JUPITER_TOTAL, FeatureID.SHADBALA_VENUS_TOTAL,
+            FeatureID.SHADBALA_SATURN_TOTAL,
+            FeatureID.MERCURY_COMBUST, FeatureID.VENUS_COMBUST, FeatureID.MARS_COMBUST,
+            FeatureID.JUPITER_COMBUST, FeatureID.SATURN_COMBUST,
+
+            # Bundle R3: Nakshatra/Pada for non-Moon planets
+            FeatureID.SUN_NAKSHATRA, FeatureID.SUN_PADA,
+            FeatureID.MARS_NAKSHATRA, FeatureID.MARS_PADA,
+            FeatureID.MERCURY_NAKSHATRA, FeatureID.MERCURY_PADA,
+            FeatureID.JUPITER_NAKSHATRA, FeatureID.JUPITER_PADA,
+            FeatureID.VENUS_NAKSHATRA, FeatureID.VENUS_PADA,
+            FeatureID.SATURN_NAKSHATRA, FeatureID.SATURN_PADA,
+
+            # Bundle R3: Sarvashtakavarga 12 bins
+            FeatureID.SAV_ARIES, FeatureID.SAV_TAURUS, FeatureID.SAV_GEMINI,
+            FeatureID.SAV_CANCER, FeatureID.SAV_LEO, FeatureID.SAV_VIRGO,
+            FeatureID.SAV_LIBRA, FeatureID.SAV_SCORPIO, FeatureID.SAV_SAGITTARIUS,
+            FeatureID.SAV_CAPRICORN, FeatureID.SAV_AQUARIUS, FeatureID.SAV_PISCES,
+
+        ]
+
+    if not _feature_resolver_enabled():
+        return {"ok": False, "reason": "FEATURE_RESOLVER_ENABLED=0", "chart_id": chart_id}
+
+    # Use Flask-SQLAlchemy session directly
+    row = db.session.get(UserChart, chart_id)
+    if row is None:
+        return {"ok": False, "reason": f"UserChart {chart_id} not found", "chart_id": chart_id}
+
+    before = {"has_bits": row.feature_presence_bits is not None, "hash": row.chart_version_hash}
+
+    # Resolve + apply mutations (no commit inside)
+    metrics = _resolve_and_persist_features_for_row(row, feature_ids)
+
+    # Commit once if persistence is enabled
+    if _feature_resolver_persist_enabled():
+        try:
+            db.session.add(row)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            return {"ok": False, "reason": f"commit_failed: {e}", "chart_id": chart_id}
+
+    after = {"has_bits": row.feature_presence_bits is not None, "hash": row.chart_version_hash}
+
+    asc = (row.chart_json or {}).get("ascendant", {})
+    sun = (row.chart_json or {}).get("planets", {}).get("sun", {})
+    moon = (row.chart_json or {}).get("planets", {}).get("moon", {})
+    rahu = (row.chart_json or {}).get("planets", {}).get("rahu", {})
+    ketu = (row.chart_json or {}).get("planets", {}).get("ketu", {})
+
+    return {
+        "ok": True,
+        "chart_id": chart_id,
+        "persist_enabled": _feature_resolver_persist_enabled(),
+        "before": before,
+        "after": after,
+        "metrics": metrics,
+        "ascendant": {"longitude": asc.get("longitude"), "sign": asc.get("sign")},
+        "sun": {"longitude": sun.get("longitude"), "sign": sun.get("sign"), "shadbala_total": (sun.get("shadbala") or {}).get("total")},
+        "moon": {"longitude": moon.get("longitude"), "sign": moon.get("sign"), "nakshatra": moon.get("nakshatra"), "pada": moon.get("pada"), "shadbala_total": (moon.get("shadbala") or {}).get("total")},
+        "rahu": {"longitude": rahu.get("longitude"), "sign": rahu.get("sign")},
+        "ketu": {"longitude": ketu.get("longitude"), "sign": ketu.get("sign")},
+    }
+
+
+
 
 # --- Dynamic Weights Loading ---
 _dynamic_weights = {} # Module-level variable to store loaded weights
@@ -1780,12 +2567,323 @@ def _fetch_and_format_insights(finding, language):
                     insights_list.append(interpretation_data)
     return insights_list
 
+def _resolve_and_persist_features_for_row(chart_row, feature_ids):
+    """
+    Uses the Task 7 resolver on a real ORM row (UserChart), applies in-memory
+    mutations (chart_json, presence bits, version hash). DOES NOT COMMIT.
+    Returns a small metrics dict for observability.
+    """
+    if not _feature_resolver_enabled():
+        return {"skipped": True, "reason": "resolver_disabled"}
+
+    # bits before
+    bits_before = Bitset.from_bytes(MAX_FEATURE_ID, chart_row.feature_presence_bits)
+    had_bits_before = sum(1 for fid in feature_ids if bits_before.has(int(fid)))
+
+    t0 = time.perf_counter()
+    resolver = FeatureResolver(chart_row)
+    _ = resolver.get_features(feature_ids)
+    resolver.apply_to_row()
+    duration_ms = (time.perf_counter() - t0) * 1000.0
+
+    # bits after
+    bits_after = Bitset.from_bytes(MAX_FEATURE_ID, chart_row.feature_presence_bits)
+    newly_set_ids = [int(fid) for fid in feature_ids if (not bits_before.has(int(fid))) and bits_after.has(int(fid))]
+    healed_keys = [REGISTRY.features[fid].key for fid in newly_set_ids if fid in REGISTRY.features]
+
+    return {
+        "requested": len(feature_ids),
+        "had_bits_before": had_bits_before,
+        "newly_set": len(newly_set_ids),
+        "healed_keys": healed_keys,
+        "duration_ms": round(duration_ms, 2),
+    }
+
+
+def _maybe_enrich_chart_with_resolver(user_chart: dict) -> dict:
+    if not _feature_resolver_enabled():
+        return user_chart
+
+    try:
+        row = SimpleNamespace(
+            chart_json=user_chart,
+            birth_data=user_chart.get("birth_data"),
+            feature_presence_bits=None,
+            chart_version_hash=None,
+        )
+        res = FeatureResolver(row)
+        vals = res.get_features([
+            # core lon/signs already used elsewhere
+            FeatureID.ASC_LONGITUDE, FeatureID.ASC_SIGN,
+            FeatureID.SUN_LONGITUDE, FeatureID.SUN_SIGN,
+            FeatureID.MOON_LONGITUDE, FeatureID.MOON_SIGN,
+            FeatureID.MOON_NAKSHATRA, FeatureID.MOON_PADA,
+            FeatureID.SHADBALA_SUN_TOTAL, FeatureID.SHADBALA_MOON_TOTAL,
+            FeatureID.MARS_LONGITUDE, FeatureID.MARS_SIGN,
+            FeatureID.MERCURY_LONGITUDE, FeatureID.MERCURY_SIGN,
+            FeatureID.JUPITER_LONGITUDE, FeatureID.JUPITER_SIGN,
+            FeatureID.VENUS_LONGITUDE, FeatureID.VENUS_SIGN,
+            FeatureID.SATURN_LONGITUDE, FeatureID.SATURN_SIGN,
+            FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN,
+            FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN,
+
+            # houses + dignities + D9 (already added in step16/17)
+            FeatureID.SUN_HOUSE, FeatureID.MOON_HOUSE, FeatureID.MARS_HOUSE,
+            FeatureID.MERCURY_HOUSE, FeatureID.JUPITER_HOUSE, FeatureID.VENUS_HOUSE,
+            FeatureID.SATURN_HOUSE,
+            FeatureID.SUN_DIGNITY, FeatureID.MOON_DIGNITY, FeatureID.MARS_DIGNITY,
+            FeatureID.MERCURY_DIGNITY, FeatureID.JUPITER_DIGNITY, FeatureID.VENUS_DIGNITY,
+            FeatureID.SATURN_DIGNITY,
+            FeatureID.SUN_D9_SIGN, FeatureID.MOON_D9_SIGN, FeatureID.MARS_D9_SIGN,
+            FeatureID.MERCURY_D9_SIGN, FeatureID.JUPITER_D9_SIGN, FeatureID.VENUS_D9_SIGN,
+            FeatureID.SATURN_D9_SIGN,
+
+            # NEW in R2: D10 + D7 + shadbala (Mars–Saturn) + combust (Mercury–Saturn)
+            FeatureID.SUN_D10_SIGN, FeatureID.MOON_D10_SIGN, FeatureID.MARS_D10_SIGN,
+            FeatureID.MERCURY_D10_SIGN, FeatureID.JUPITER_D10_SIGN, FeatureID.VENUS_D10_SIGN,
+            FeatureID.SATURN_D10_SIGN,
+            FeatureID.SUN_D7_SIGN, FeatureID.MOON_D7_SIGN, FeatureID.MARS_D7_SIGN,
+            FeatureID.MERCURY_D7_SIGN, FeatureID.JUPITER_D7_SIGN, FeatureID.VENUS_D7_SIGN,
+            FeatureID.SATURN_D7_SIGN,
+            FeatureID.SHADBALA_MARS_TOTAL, FeatureID.SHADBALA_MERCURY_TOTAL,
+            FeatureID.SHADBALA_JUPITER_TOTAL, FeatureID.SHADBALA_VENUS_TOTAL,
+            FeatureID.SHADBALA_SATURN_TOTAL,
+            FeatureID.MERCURY_RETROGRADE, FeatureID.VENUS_RETROGRADE, FeatureID.MARS_RETROGRADE,
+            FeatureID.JUPITER_RETROGRADE, FeatureID.SATURN_RETROGRADE,
+            FeatureID.MERCURY_COMBUST, FeatureID.VENUS_COMBUST, FeatureID.MARS_COMBUST,
+            FeatureID.JUPITER_COMBUST, FeatureID.SATURN_COMBUST,
+
+            # Bundle R3: Nakshatra/Pada for non-Moon planets
+            FeatureID.SUN_NAKSHATRA, FeatureID.SUN_PADA,
+            FeatureID.MARS_NAKSHATRA, FeatureID.MARS_PADA,
+            FeatureID.MERCURY_NAKSHATRA, FeatureID.MERCURY_PADA,
+            FeatureID.JUPITER_NAKSHATRA, FeatureID.JUPITER_PADA,
+            FeatureID.VENUS_NAKSHATRA, FeatureID.VENUS_PADA,
+            FeatureID.SATURN_NAKSHATRA, FeatureID.SATURN_PADA,
+
+            # Bundle R3: Sarvashtakavarga 12 bins
+            FeatureID.SAV_ARIES, FeatureID.SAV_TAURUS, FeatureID.SAV_GEMINI,
+            FeatureID.SAV_CANCER, FeatureID.SAV_LEO, FeatureID.SAV_VIRGO,
+            FeatureID.SAV_LIBRA, FeatureID.SAV_SCORPIO, FeatureID.SAV_SAGITTARIUS,
+            FeatureID.SAV_CAPRICORN, FeatureID.SAV_AQUARIUS, FeatureID.SAV_PISCES,
+
+
+            # Node houses (from earlier bundle)
+            FeatureID.RAHU_HOUSE, FeatureID.KETU_HOUSE,
+        ])
+
+        # Asc
+        asc = user_chart.setdefault("ascendant", {})
+        if vals.get(FeatureID.ASC_LONGITUDE) is not None and asc.get("longitude") is None:
+            asc["longitude"] = vals[FeatureID.ASC_LONGITUDE]
+        if vals.get(FeatureID.ASC_SIGN) is not None and asc.get("sign") is None:
+            asc["sign"] = vals[FeatureID.ASC_SIGN]
+
+        planets = user_chart.setdefault("planets", {})
+
+        def _put_planet(pname, fid_lon, fid_sign, fid_house=None, fid_dignity=None, fid_shadbala=None):
+            node = planets.setdefault(pname, {})
+            if fid_lon is not None and node.get("longitude") is None and vals.get(fid_lon) is not None:
+                node["longitude"] = vals[fid_lon]
+            if fid_sign is not None and node.get("sign") is None and vals.get(fid_sign) is not None:
+                node["sign"] = vals[fid_sign]
+            if fid_house is not None and node.get("house") is None and vals.get(fid_house) is not None:
+                node["house"] = vals[fid_house]
+            if fid_dignity is not None and node.get("dignity") is None and vals.get(fid_dignity) is not None:
+                node["dignity"] = vals[fid_dignity]
+            if fid_shadbala is not None and vals.get(fid_shadbala) is not None:
+                node.setdefault("shadbala", {})["total"] = vals[fid_shadbala]
+
+        # Sun & Moon
+        _put_planet("sun",
+            FeatureID.SUN_LONGITUDE, FeatureID.SUN_SIGN,
+            FeatureID.SUN_HOUSE, FeatureID.SUN_DIGNITY, FeatureID.SHADBALA_SUN_TOTAL)
+        _put_planet("moon",
+            FeatureID.MOON_LONGITUDE, FeatureID.MOON_SIGN,
+            FeatureID.MOON_HOUSE, FeatureID.MOON_DIGNITY, FeatureID.SHADBALA_MOON_TOTAL)
+
+        # Moon extras
+        moon = planets.setdefault("moon", {})
+        if moon.get("nakshatra") is None and vals.get(FeatureID.MOON_NAKSHATRA) is not None:
+            moon["nakshatra"] = vals[FeatureID.MOON_NAKSHATRA]
+        if moon.get("pada") is None and vals.get(FeatureID.MOON_PADA) is not None:
+            moon["pada"] = vals[FeatureID.MOON_PADA]
+
+        # Mars → Saturn
+        _put_planet("mars",    FeatureID.MARS_LONGITUDE,    FeatureID.MARS_SIGN,    FeatureID.MARS_HOUSE,    FeatureID.MARS_DIGNITY,    FeatureID.SHADBALA_MARS_TOTAL)
+        _put_planet("mercury", FeatureID.MERCURY_LONGITUDE, FeatureID.MERCURY_SIGN, FeatureID.MERCURY_HOUSE, FeatureID.MERCURY_DIGNITY, FeatureID.SHADBALA_MERCURY_TOTAL)
+        _put_planet("jupiter", FeatureID.JUPITER_LONGITUDE, FeatureID.JUPITER_SIGN, FeatureID.JUPITER_HOUSE, FeatureID.JUPITER_DIGNITY, FeatureID.SHADBALA_JUPITER_TOTAL)
+        _put_planet("venus",   FeatureID.VENUS_LONGITUDE,   FeatureID.VENUS_SIGN,   FeatureID.VENUS_HOUSE,   FeatureID.VENUS_DIGNITY,   FeatureID.SHADBALA_VENUS_TOTAL)
+        _put_planet("saturn",  FeatureID.SATURN_LONGITUDE,  FeatureID.SATURN_SIGN,  FeatureID.SATURN_HOUSE,  FeatureID.SATURN_DIGNITY,  FeatureID.SHADBALA_SATURN_TOTAL)
+
+        # Nodes: lon/sign + house
+        _put_planet("rahu", FeatureID.RAHU_LONGITUDE, FeatureID.RAHU_SIGN)
+        _put_planet("ketu", FeatureID.KETU_LONGITUDE, FeatureID.KETU_SIGN)
+        rahu = planets.setdefault("rahu", {})
+        if rahu.get("house") is None and vals.get(FeatureID.RAHU_HOUSE) is not None:
+            rahu["house"] = vals[FeatureID.RAHU_HOUSE]
+        ketu = planets.setdefault("ketu", {})
+        if ketu.get("house") is None and vals.get(FeatureID.KETU_HOUSE) is not None:
+            ketu["house"] = vals[FeatureID.KETU_HOUSE]
+
+        # --- D9 (Navamsa) sign: write if missing ------------------------------------
+        sun = planets.setdefault("sun", {})
+        if sun.get("d9_sign") is None and vals.get(FeatureID.SUN_D9_SIGN) is not None:
+            sun["d9_sign"] = vals[FeatureID.SUN_D9_SIGN]
+
+        moon = planets.setdefault("moon", {})
+        if moon.get("d9_sign") is None and vals.get(FeatureID.MOON_D9_SIGN) is not None:
+            moon["d9_sign"] = vals[FeatureID.MOON_D9_SIGN]
+
+        mars = planets.setdefault("mars", {})
+        if mars.get("d9_sign") is None and vals.get(FeatureID.MARS_D9_SIGN) is not None:
+            mars["d9_sign"] = vals[FeatureID.MARS_D9_SIGN]
+
+        mercury = planets.setdefault("mercury", {})
+        if mercury.get("d9_sign") is None and vals.get(FeatureID.MERCURY_D9_SIGN) is not None:
+            mercury["d9_sign"] = vals[FeatureID.MERCURY_D9_SIGN]
+
+        jupiter = planets.setdefault("jupiter", {})
+        if jupiter.get("d9_sign") is None and vals.get(FeatureID.JUPITER_D9_SIGN) is not None:
+            jupiter["d9_sign"] = vals[FeatureID.JUPITER_D9_SIGN]
+
+        venus = planets.setdefault("venus", {})
+        if venus.get("d9_sign") is None and vals.get(FeatureID.VENUS_D9_SIGN) is not None:
+            venus["d9_sign"] = vals[FeatureID.VENUS_D9_SIGN]
+
+        saturn = planets.setdefault("saturn", {})
+        if saturn.get("d9_sign") is None and vals.get(FeatureID.SATURN_D9_SIGN) is not None:
+            saturn["d9_sign"] = vals[FeatureID.SATURN_D9_SIGN]
+
+
+        # D10
+        for pname, fid in [
+            ("sun", FeatureID.SUN_D10_SIGN), ("moon", FeatureID.MOON_D10_SIGN),
+            ("mars", FeatureID.MARS_D10_SIGN), ("mercury", FeatureID.MERCURY_D10_SIGN),
+            ("jupiter", FeatureID.JUPITER_D10_SIGN), ("venus", FeatureID.VENUS_D10_SIGN),
+            ("saturn", FeatureID.SATURN_D10_SIGN),
+        ]:
+            node = planets.setdefault(pname, {})
+            if node.get("d10_sign") is None and vals.get(fid) is not None:
+                node["d10_sign"] = vals[fid]
+
+        # D7
+        for pname, fid in [
+            ("sun", FeatureID.SUN_D7_SIGN), ("moon", FeatureID.MOON_D7_SIGN),
+            ("mars", FeatureID.MARS_D7_SIGN), ("mercury", FeatureID.MERCURY_D7_SIGN),
+            ("jupiter", FeatureID.JUPITER_D7_SIGN), ("venus", FeatureID.VENUS_D7_SIGN),
+            ("saturn", FeatureID.SATURN_D7_SIGN),
+        ]:
+            node = planets.setdefault(pname, {})
+            if node.get("d7_sign") is None and vals.get(fid) is not None:
+                node["d7_sign"] = vals[fid]
+
+        # Retrograde flags for classical 5
+        for pname, fid in [
+            ("mercury", FeatureID.MERCURY_RETROGRADE),
+            ("venus",   FeatureID.VENUS_RETROGRADE),
+            ("mars",    FeatureID.MARS_RETROGRADE),
+            ("jupiter", FeatureID.JUPITER_RETROGRADE),
+            ("saturn",  FeatureID.SATURN_RETROGRADE),
+        ]:
+            node = planets.setdefault(pname, {})
+            if node.get("retrograde") is None and vals.get(fid) is not None:
+                node["retrograde"] = bool(vals[fid])
+
+
+        # Retro flags are already present; now set combustion flags
+        for pname, fid in [
+            ("mercury", FeatureID.MERCURY_COMBUST),
+            ("venus",   FeatureID.VENUS_COMBUST),
+            ("mars",    FeatureID.MARS_COMBUST),
+            ("jupiter", FeatureID.JUPITER_COMBUST),
+            ("saturn",  FeatureID.SATURN_COMBUST),
+        ]:
+            node = planets.setdefault(pname, {})
+            if node.get("combust") is None and vals.get(fid) is not None:
+                node["combust"] = bool(vals[fid])
+
+        # --- Bundle R3 writes: Nakshatra/Pada for non-Moon planets -----------
+        for pname, fid_nk, fid_pd in [
+            ("sun",     FeatureID.SUN_NAKSHATRA,     FeatureID.SUN_PADA),
+            ("mars",    FeatureID.MARS_NAKSHATRA,    FeatureID.MARS_PADA),
+            ("mercury", FeatureID.MERCURY_NAKSHATRA, FeatureID.MERCURY_PADA),
+            ("jupiter", FeatureID.JUPITER_NAKSHATRA, FeatureID.JUPITER_PADA),
+            ("venus",   FeatureID.VENUS_NAKSHATRA,   FeatureID.VENUS_PADA),
+            ("saturn",  FeatureID.SATURN_NAKSHATRA,  FeatureID.SATURN_PADA),
+        ]:
+            node = planets.setdefault(pname, {})
+            if node.get("nakshatra") is None and vals.get(fid_nk) is not None:
+                node["nakshatra"] = vals[fid_nk]
+            if node.get("pada") is None and vals.get(fid_pd) is not None:
+                node["pada"] = vals[fid_pd]
+
+        # --- Bundle R3 writes: Sarvashtakavarga 12 bins -----------------------
+        sav = user_chart.setdefault("ashtakavarga_scores", {}).setdefault("sarvashtakavarga", {})
+        sav_map = {
+            "aries":        FeatureID.SAV_ARIES,
+            "taurus":       FeatureID.SAV_TAURUS,
+            "gemini":       FeatureID.SAV_GEMINI,
+            "cancer":       FeatureID.SAV_CANCER,
+            "leo":          FeatureID.SAV_LEO,
+            "virgo":        FeatureID.SAV_VIRGO,
+            "libra":        FeatureID.SAV_LIBRA,
+            "scorpio":      FeatureID.SAV_SCORPIO,
+            "sagittarius":  FeatureID.SAV_SAGITTARIUS,
+            "capricorn":    FeatureID.SAV_CAPRICORN,
+            "aquarius":     FeatureID.SAV_AQUARIUS,
+            "pisces":       FeatureID.SAV_PISCES,
+        }
+        for sign_name, fid in sav_map.items():
+            if sav.get(sign_name) is None and vals.get(fid) is not None:
+                try:
+                    sav[sign_name] = int(vals[fid])
+                except Exception:
+                    pass
+
+
+        # Note: no DB commit here (this helper is purely in-memory)
+    except Exception as e:
+        print(f"[Resolver] Enrichment skipped due to: {e}")
+
+    return user_chart
+
+
+
 # --- Analytical Brief Compiler ---
+
+def compile_analytical_brief_from_row(chart_row, trigger_context, related_charts=None):
+    """
+    Convenience wrapper: accept a UserChart ORM row, resolve a small, foundational
+    feature batch (ascendant longitude & sign) with the Task 7 resolver, optionally
+    persist the updates (presence bits + version hash + chart_json), then call the
+    existing compile_analytical_brief with the (possibly) updated chart dict.
+    Behavior is fully flag-guarded; with flags off, this is effectively a pass-through.
+    """
+    # Minimal safe batch for now — expand later as we adopt more features
+    feature_batch = [FeatureID.ASC_LONGITUDE, FeatureID.ASC_SIGN]
+
+    # If resolver is disabled, simply pass the current chart dict through
+    if not _feature_resolver_enabled():
+        chart_dict = chart_row.chart_json or {}
+        return compile_analytical_brief(chart_dict, trigger_context, related_charts)
+
+    # Use the resolver and apply in-memory changes to the row
+    _resolve_and_persist_features_for_row(chart_row, feature_batch)
+
+    # Use the (possibly) updated chart dict; if nothing changed, it’s the same object
+    chart_dict = chart_row.chart_json or {}
+    return compile_analytical_brief(chart_dict, trigger_context, related_charts)
+
+
 def compile_analytical_brief(user_chart, trigger_context, related_charts=None):
     """
     Orchestrates the entire analysis, filters findings, fetches insights,
     and assembles the final structured Analytical Brief for the LLM.
     """
+    # Task 7: opportunistically ensure ascendant.longitude via resolver (flag-guarded)
+    user_chart = _maybe_enrich_chart_with_resolver(user_chart)
+
     # Assume transit_positions and ashtakavarga_scores are directly available or fetched here
     # For now, fetch transit_positions dynamically as it's time-dependent
     transit_positions = rohini_engine.get_transit_positions(datetime.now())
@@ -1870,7 +2968,7 @@ def compile_analytical_brief(user_chart, trigger_context, related_charts=None):
             "dignity": planet_data.get('dignity'),
             "status": planet_data.get('status'),
             "shadbala_total": planet_data.get('shadbala', {}).get('total'),
-            "is_retrograde": planet_data.get('is_retrograde', False)
+            "is_retrograde": planet_data.get('retrograde', False)
         }
 
     # Extract current dasha/gochar from findings and populate current_dasha_gochar
@@ -1887,22 +2985,88 @@ def compile_analytical_brief(user_chart, trigger_context, related_charts=None):
     analytical_brief['master_persona_prompt'] = db_utils.fetch_prompt_template('master_persona', language)
     analytical_brief['analytical_brief_template'] = db_utils.fetch_prompt_template('analytical_brief', language)
 
+    # ---- (NEW) Match a template & record provenance ----
+    try:
+        q = trigger_context.get('query') or trigger_context.get('event') or ""
+        locale = language
+        # call your existing matching pipeline
+        match_res = select_template_with_fallbacks(q, locale=locale)
+
+        # attach match info to the brief (always)
+        analytical_brief["template_selection"] = match_res
+
+        # save provenance using your working helper from tests
+        record_provenance_from_match(
+            match_res,
+            user_id=user_chart.get('user_id', None),
+            locale=locale,
+            inputs={"query": q, "locale": locale},
+            trigger=trigger_context.get('type'),
+        )
+
+        # ---- (NEW) Rules runtime integration (safe, optional) ----
+        try:
+            tpl_id = match_res.get("template_id")
+            if tpl_id:
+                # Load the matched template so we can read its rules/thresholds
+                store = TemplateStore(db.session)
+                tpl = store.load_by_id(tpl_id)  # returns BriefTemplate row with .rules JSON
+
+                # Prefer variant checks if available; fallback to template.rules
+                rules_cfg = store.get_rules(tpl_id, match_res.get("variant_id"))
+                rules_list = rules_cfg.get("rules", [])
+                thresholds = rules_cfg.get("thresholds", {})
+
+                if rules_list:
+                    payload = RulesPayload(rules=rules_list, thresholds=thresholds)
+                    eval_res = evaluate_ruleset_for_chart(
+                        chart_json=user_chart,
+                        payload=payload,
+                    )
+
+                    analytical_brief["rules_evidence"] = {
+                        "valid": eval_res.valid,
+                        "score": eval_res.score,
+                        "fired": eval_res.fired,
+                        "failed": eval_res.failed,
+                        "gates_failed": eval_res.gates_failed,
+                    }
+
+                    # Fetch KB insights for the fired rules (centralized service)
+                    kb_hits = get_insights_for_rules(
+                        rule_ids=eval_res.fired,
+                        locale=locale,
+                        db_utils=db_utils,
+                        template_id=tpl_id,
+                    )
+                    if kb_hits:
+                        analytical_brief.setdefault("knowledge_insights", {}) \
+                                        .setdefault("rules", []) \
+                                        .extend(kb_hits)
+        except Exception as e_rules:
+            analytical_brief.setdefault("debug", {})["rules_integration_error"] = str(e_rules)
+
+    except Exception as e:
+        analytical_brief.setdefault("debug", {})["matching_error"] = str(e)
+
+    # ---- end NEW ----
+
     # Placeholder for related_chart_analysis if provided
     if related_charts:
         analytical_brief['related_chart_analysis'] = {
-            "chart_details": { # Simplified details for related chart
+            "chart_details": {  # Simplified details for related chart
                 "name": related_charts[0].get('birth_data', {}).get('name'),
                 "relation_type": related_charts[0].get('relation_type', 'unknown')
             },
-            "compatibility_findings": [], # To be populated in future tasks
-            "progeny_indicators": [] # To be populated in future tasks
+            "compatibility_findings": [],  # To be populated in future tasks
+            "progeny_indicators": []  # To be populated in future tasks
         }
 
     return analytical_brief
 
 ```
 
-### astrological_constants.py
+### /home/runner/work/astro_proj/astro_proj/engines/astrological_constants.py
 
 
 ```python
@@ -2694,7 +3858,7 @@ Columns:
 
 
 ```markdown
-# Astrological Chart for Manish
+# Astrological Chart For Manish
 
 ## Birth Details
 ### Birth Data
@@ -2709,16 +3873,16 @@ Columns:
 - **Longitude**: 78.088
 - **Timezone Str**: Asia/Kolkata
 
-## Avakahada Chakra (Vedic Foundational Details)
+## Avakahada Chakra
 - **Nakshatra**: Purva Bhadrapada
 - **Pada (Charan)**: 4
 - **Rasi (Sign)**: Pisces
 - **Lagna (Ascendant)**: Sagittarius
 - **Varna (Function)**: Brahmin
-- **Vashya (Influence)**: Jalachara
+- **Vashya (Influence)**: Water-being
 - **Yoni (Nature)**: Lion
-- **Gana (Temperament)**: Manushya
-- **Nadi (Constitution)**: Adi
+- **Gana (Temperament)**: Manushya (Human)
+- **Nadi (Constitution)**: Adi (Vata)
 - **Nakshatra Lord**: Jupiter
 ## Panchang at Birth
 | Limb | Value | Lord | Notes |
@@ -2733,16 +3897,16 @@ Columns:
 ---
 
 ## Planetary Analysis
-### Planetary Positions & Shadbala
-| Planet | Longitude | Rasi D1 | D9 Sign | Nakshatra (Pada) | House | Dignity | Status | Ishta | Kashta | Total Shadbala |
+### Planetary Positions Shadbala
+| Planet | Longitude | Rasi D1 | D9 Sign | Nakshatra Pada | House | Dignity | Status | Ishta | Kashta | Total Shadbala |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **Sun** | 51° 31' 48" / 21° 31' 48" taurus | Taurus | **Cancer** | Rohini (4) | 6 | Enemy Sign | Normal | 0.0 | 4.71 | **1.06** |
-| **Moon** | 330° 42' 51" / 0° 42' 51" pisces | Pisces | **Cancer** | Purva Bhadrapada (4) | 4 | Neutral Sign | Normal | 0.0 | 4.55 | **1.98** |
+| **Sun** | 51° 31' 47" / 21° 31' 47" taurus | Taurus | **Cancer** | Rohini (4) | 6 | Enemy Sign | Normal | 0.0 | 4.71 | **1.06** |
+| **Moon** | 330° 42' 52" / 0° 42' 52" pisces | Pisces | **Cancer** | Purva Bhadrapada (4) | 4 | Neutral Sign | Normal | 0.0 | 4.55 | **1.98** |
 | **Mars** | 81° 52' 56" / 21° 52' 56" gemini | Gemini | **Aries** | Punarvasu (1) | 7 | Enemy Sign | Normal | 0.0 | 4.71 | **0.76** |
-| **Mercury** | 52° 25' 12" / 22° 25' 12" taurus | Taurus | **Cancer** | Rohini (4) | 6 | Friendly Sign | Combust (0.89°) | 0.0 | 4.21 | **0.8** |
+| **Mercury** | 52° 25' 11" / 22° 25' 11" taurus | Taurus | **Cancer** | Rohini (4) | 6 | Friendly Sign | Combust With Dist | 0.0 | 4.21 | **0.8** |
 | **Jupiter** | 252° 19' 34" / 12° 19' 34" sagittarius | Sagittarius | **Cancer** | Moola (4) | 1 | Moolatrikona | Retrograde | 4.21 | 0.0 | **3.15** |
 | **Venus** | 69° 28' 48" / 9° 28' 48" gemini | Gemini | **Sagittarius** | Ardra (1) | 7 | Friendly Sign | Retrograde | 2.43 | 0.0 | **1.5** |
-| **Saturn** | 47° 9' 51" / 17° 9' 51" taurus | Taurus | **Gemini** | Rohini (3) | 6 | Friendly Sign | Combust (4.37°) | 0.0 | 4.21 | **0.35** |
+| **Saturn** | 47° 9' 51" / 17° 9' 51" taurus | Taurus | **Gemini** | Rohini (3) | 6 | Friendly Sign | Combust With Dist | 0.0 | 4.21 | **0.35** |
 | **Rahu** | 274° 51' 52" / 4° 51' 52" capricorn | Capricorn | **Aquarius** | Uttara Ashadha (3) | 2 | Node | Normal | N/A | N/A | **0.0** |
 | **Ketu** | 94° 51' 52" / 4° 51' 52" cancer | Cancer | **Leo** | Pushya (1) | 8 | Node | Normal | N/A | N/A | **0.0** |
 
@@ -2766,43 +3930,67 @@ Columns:
 
 ---
 
-## Advanced Planetary States (Avasthas)
-| Planet | Baladi Avastha (Age) | Deeptaadi Avastha (Disposition) | Lajjitaadi Avastha (Mood) |
+## Divisional Charts (Vargas)
+
+### D9 Chart
+- **Sun** → *Cancer*
+- **Moon** → *Cancer*
+- **Mars** → *Aries*
+- **Mercury** → *Cancer*
+- **Jupiter** → *Cancer*
+- **Venus** → *Sagittarius*
+- **Saturn** → *Gemini*
+- **Rahu** → *Aquarius*
+- **Ketu** → *Leo*
+
+### D10 Chart
+- **Sun** → *Leo*
+- **Moon** → *Scorpio*
+- **Mars** → *Capricorn*
+- **Mercury** → *Leo*
+- **Jupiter** → *Aries*
+- **Venus** → *Virgo*
+- **Saturn** → *Gemini*
+- **Rahu** → *Libra*
+- **Ketu** → *Aries*
+
+## Advanced Planetary States
+| Planet | Baladi Avastha | Deeptadi Avastha | Lajjitaadi Avastha |
 |---|---|---|---|
-| **Sun** | Kumara (Youthful) | Duhkhita (Miserable) | **Kshudhita (Starved)** |
-| **Moon** | Mrita (Dead) | Shanta (Peaceful) | **Shanta (Peaceful)** |
-| **Mars** | Vriddha (Aged) | Duhkhita (Miserable) | **Kshudhita (Starved)** |
-| **Mercury** | Kumara (Youthful) | Pramudita (Delighted) | **Mudita (Delighted)** |
-| **Jupiter** | Yuva (Adolescent/Prime) | Unknown | **Garvita (Proud)** |
-| **Venus** | Kumara (Youthful) | Pramudita (Delighted) | **Mudita (Delighted)** |
-| **Saturn** | Yuva (Adolescent/Prime) | Pramudita (Delighted) | **Mudita (Delighted)** |
+| **Sun** | Kumara | Duhkhita | **Kshudhita** |
+| **Moon** | Mrita | Shanta | **Shanta** |
+| **Mars** | Vriddha | Duhkhita | **Kshudhita** |
+| **Mercury** | Kumara | Pramudita | **Mudita** |
+| **Jupiter** | Yuva | Unknown | **Garvita** |
+| **Venus** | Kumara | Pramudita | **Mudita** |
+| **Saturn** | Yuva | Pramudita | **Mudita** |
 
 ---
 
 ## Core Astrological Evaluation
 ### House Classification Analysis
-- **Sun** Planet In House 6: Dusthana (Malefic), Upachaya (Growth)
-- **Moon** Planet In House 4: Kendra (Angular)
-- **Mars** Planet In House 7: Kendra (Angular)
-- **Mercury** Planet In House 6: Dusthana (Malefic), Upachaya (Growth)
-- **Jupiter** Planet In House 1: Kendra (Angular), Trikona (Trinal)
-- **Venus** Planet In House 7: Kendra (Angular)
-- **Saturn** Planet In House 6: Dusthana (Malefic), Upachaya (Growth)
+- **Sun** Planet In House 6: Dusthana Malefic, Upachaya Growth
+- **Moon** Planet In House 4: Kendra Angular
+- **Mars** Planet In House 7: Kendra Angular
+- **Mercury** Planet In House 6: Dusthana Malefic, Upachaya Growth
+- **Jupiter** Planet In House 1: Kendra Angular, Trikona Trinal
+- **Venus** Planet In House 7: Kendra Angular
+- **Saturn** Planet In House 6: Dusthana Malefic, Upachaya Growth
 - **Rahu** Planet In House 2: Neutral
-- **Ketu** Planet In House 8: Dusthana (Malefic)
+- **Ketu** Planet In House 8: Dusthana Malefic
 
-### Debilitation Cancellation (Neecha Bhanga) Analysis
+### Debilitation Cancellation Analysis
 No Debilitated Planets
 
-### Kemadruma Yoga (Loneliness of the Moon) Analysis
-- **Kemadruma Cancelled** Overridden by:
-  - Planets In Kendra Asc
+### Kemadruma Yoga Analysis
+- **Kemadruma Cancelled** Overridden By
   - Moon In Kendra
+  - Planets In Kendra Asc
 
 ---
 
-## Planetary Positional Strength (Bhava Madhya & Sandhi)
-| Planet | Planetary Positional Strength (Bhava Madhya & Sandhi) |
+## Planetary Positional Strength
+| Planet | Planetary Positional Strength |
 |---|---|
 | **Sun** | Very Strong At Bhava Madhya |
 | **Moon** | Normal Position |
@@ -2818,8 +4006,8 @@ No Debilitated Planets
 
 ## Major Dosha Analysis
 ### Mangal Dosha Analysis
-- **Status**: Present (Severity: **High**)
-- **Amplifying Factors (Strengthening the dosha):**
+- **Status**: Present Severity
+- **Amplifying Factors**
   - Mars is weak in an Enemy Sign.
 
 ---
@@ -2841,7 +4029,7 @@ No Debilitated Planets
 
 ---
 
-## Transit Analysis (Gochar)
+## Transit Analysis
 ### Peak Phase
 - **Status**: Saturn In Bindus
 ### Jupiter Transiting House 4
@@ -3000,8 +4188,8 @@ No Debilitated Planets
 |---|---|---|---|
 | Moon | 1974-08-27 | 1974-09-04 | 8 |
 | Mars | 1974-09-04 | 1974-09-09 | 6 |
-| Rahu | 1974-09-09 | 1974-09-24 | 14 |
-| Jupiter | 1974-09-24 | 1974-10-06 | 13 |
+| Rahu | 1974-09-09 | 1974-09-23 | 14 |
+| Jupiter | 1974-09-23 | 1974-10-06 | 13 |
 | Saturn | 1974-10-06 | 1974-10-21 | 15 |
 | Mercury | 1974-10-21 | 1974-11-04 | 14 |
 | Ketu | 1974-11-04 | 1974-11-10 | 6 |
@@ -3090,8 +4278,8 @@ No Debilitated Planets
 | Moon | 1985-08-04 | 1985-09-02 | 29 |
 | Mars | 1985-09-02 | 1985-09-22 | 20 |
 | Rahu | 1985-09-22 | 1985-11-13 | 52 |
-| Jupiter | 1985-11-13 | 1985-12-30 | 46 |
-| Saturn | 1985-12-30 | 1986-02-22 | 55 |
+| Jupiter | 1985-11-13 | 1985-12-29 | 46 |
+| Saturn | 1985-12-29 | 1986-02-22 | 55 |
 | Mercury | 1986-02-22 | 1986-04-13 | 49 |
 | Ketu | 1986-04-13 | 1986-05-03 | 20 |
 | Venus | 1986-05-03 | 1986-06-30 | 58 |
@@ -3153,8 +4341,8 @@ No Debilitated Planets
 | Mercury | 1994-07-27 | 1994-11-29 | 125 |
 | Ketu | 1994-11-29 | 1995-01-19 | 51 |
 | Venus | 1995-01-19 | 1995-06-15 | 147 |
-| Sun | 1995-06-15 | 1995-07-29 | 44 |
-| Moon | 1995-07-29 | 1995-10-10 | 73 |
+| Sun | 1995-06-15 | 1995-07-28 | 44 |
+| Moon | 1995-07-28 | 1995-10-10 | 73 |
 | Mars | 1995-10-10 | 1995-11-30 | 51 |
 | Rahu | 1995-11-30 | 1996-04-10 | 132 |
 | Jupiter | 1996-04-10 | 1996-08-05 | 117 |
@@ -3169,8 +4357,8 @@ No Debilitated Planets
 | Mars | 1997-05-01 | 1997-05-23 | 21 |
 | Rahu | 1997-05-23 | 1997-07-16 | 54 |
 | Jupiter | 1997-07-16 | 1997-09-02 | 48 |
-| Saturn | 1997-09-02 | 1997-10-30 | 57 |
-| Mercury | 1997-10-30 | 1997-12-20 | 51 |
+| Saturn | 1997-09-02 | 1997-10-29 | 57 |
+| Mercury | 1997-10-29 | 1997-12-20 | 51 |
 | **Venus** | 1997-12-20 | 2000-10-20 | 1035 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
@@ -3234,8 +4422,8 @@ No Debilitated Planets
 | **Jupiter** | 2006-08-11 | 2008-11-16 | 828 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
-| Jupiter | 2006-08-11 | 2006-11-30 | 110 |
-| Saturn | 2006-11-30 | 2007-04-10 | 131 |
+| Jupiter | 2006-08-11 | 2006-11-29 | 110 |
+| Saturn | 2006-11-29 | 2007-04-10 | 131 |
 | Mercury | 2007-04-10 | 2007-08-05 | 117 |
 | Ketu | 2007-08-05 | 2007-09-22 | 48 |
 | Venus | 2007-09-22 | 2008-02-07 | 138 |
@@ -3268,8 +4456,8 @@ No Debilitated Planets
 | Moon | 2011-09-06 | 2011-09-19 | 12 |
 | Mars | 2011-09-19 | 2011-09-27 | 9 |
 | Rahu | 2011-09-27 | 2011-10-20 | 22 |
-| Jupiter | 2011-10-20 | 2011-11-09 | 20 |
-| Saturn | 2011-11-09 | 2011-12-02 | 24 |
+| Jupiter | 2011-10-20 | 2011-11-08 | 20 |
+| Saturn | 2011-11-08 | 2011-12-02 | 24 |
 | Mercury | 2011-12-02 | 2011-12-23 | 21 |
 | **Venus** | 2011-12-23 | 2013-02-21 | 426 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
@@ -3302,8 +4490,8 @@ No Debilitated Planets
 | Mars | 2013-07-17 | 2013-07-29 | 12 |
 | Rahu | 2013-07-29 | 2013-08-30 | 32 |
 | Jupiter | 2013-08-30 | 2013-09-28 | 28 |
-| Saturn | 2013-09-28 | 2013-11-01 | 34 |
-| Mercury | 2013-11-01 | 2013-12-01 | 30 |
+| Saturn | 2013-09-28 | 2013-10-31 | 34 |
+| Mercury | 2013-10-31 | 2013-12-01 | 30 |
 | Ketu | 2013-12-01 | 2013-12-13 | 12 |
 | Venus | 2013-12-13 | 2014-01-18 | 36 |
 | Sun | 2014-01-18 | 2014-01-28 | 11 |
@@ -3326,8 +4514,8 @@ No Debilitated Planets
 | Jupiter | 2014-08-23 | 2014-10-13 | 51 |
 | Saturn | 2014-10-13 | 2014-12-13 | 61 |
 | Mercury | 2014-12-13 | 2015-02-05 | 54 |
-| Ketu | 2015-02-05 | 2015-02-28 | 22 |
-| Venus | 2015-02-28 | 2015-05-02 | 64 |
+| Ketu | 2015-02-05 | 2015-02-27 | 22 |
+| Venus | 2015-02-27 | 2015-05-02 | 64 |
 | Sun | 2015-05-02 | 2015-05-22 | 19 |
 | Moon | 2015-05-22 | 2015-06-23 | 32 |
 | Mars | 2015-06-23 | 2015-07-15 | 22 |
@@ -3426,8 +4614,8 @@ No Debilitated Planets
 | Jupiter | 2026-03-09 | 2026-08-02 | 146 |
 | Saturn | 2026-08-02 | 2027-01-22 | 173 |
 | Mercury | 2027-01-22 | 2027-06-27 | 155 |
-| Ketu | 2027-06-27 | 2027-08-30 | 64 |
-| Venus | 2027-08-30 | 2028-02-28 | 183 |
+| Ketu | 2027-06-27 | 2027-08-29 | 64 |
+| Venus | 2027-08-29 | 2028-02-28 | 183 |
 | Sun | 2028-02-28 | 2028-04-23 | 55 |
 | Moon | 2028-04-23 | 2028-07-23 | 91 |
 | Mars | 2028-07-23 | 2028-09-25 | 64 |
@@ -3453,8 +4641,8 @@ No Debilitated Planets
 | Sun | 2033-01-23 | 2033-03-22 | 58 |
 | Moon | 2033-03-22 | 2033-06-27 | 96 |
 | Mars | 2033-06-27 | 2033-09-02 | 67 |
-| Rahu | 2033-09-02 | 2034-02-23 | 173 |
-| Jupiter | 2034-02-23 | 2034-07-27 | 154 |
+| Rahu | 2033-09-02 | 2034-02-22 | 173 |
+| Jupiter | 2034-02-22 | 2034-07-27 | 154 |
 | **Mercury** | 2034-07-27 | 2037-05-27 | 1035 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
@@ -3463,8 +4651,8 @@ No Debilitated Planets
 | Venus | 2035-02-19 | 2035-08-10 | 172 |
 | Sun | 2035-08-10 | 2035-10-01 | 52 |
 | Moon | 2035-10-01 | 2035-12-26 | 86 |
-| Mars | 2035-12-26 | 2036-02-25 | 60 |
-| Rahu | 2036-02-25 | 2036-07-29 | 155 |
+| Mars | 2035-12-26 | 2036-02-24 | 60 |
+| Rahu | 2036-02-24 | 2036-07-29 | 155 |
 | Jupiter | 2036-07-29 | 2036-12-14 | 138 |
 | Saturn | 2036-12-14 | 2037-05-27 | 164 |
 | **Ketu** | 2037-05-27 | 2038-07-27 | 426 |
@@ -3500,8 +4688,8 @@ No Debilitated Planets
 |---|---|---|---|
 | Moon | 2038-11-13 | 2038-11-28 | 15 |
 | Mars | 2038-11-28 | 2038-12-09 | 11 |
-| Rahu | 2038-12-09 | 2039-01-06 | 27 |
-| Jupiter | 2039-01-06 | 2039-01-30 | 24 |
+| Rahu | 2038-12-09 | 2039-01-05 | 27 |
+| Jupiter | 2039-01-05 | 2039-01-30 | 24 |
 | Saturn | 2039-01-30 | 2039-02-28 | 29 |
 | Mercury | 2039-02-28 | 2039-03-26 | 26 |
 | Ketu | 2039-03-26 | 2039-04-05 | 11 |
@@ -3511,8 +4699,8 @@ No Debilitated Planets
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
 | Mars | 2039-05-15 | 2039-05-22 | 7 |
-| Rahu | 2039-05-22 | 2039-06-11 | 19 |
-| Jupiter | 2039-06-11 | 2039-06-28 | 17 |
+| Rahu | 2039-05-22 | 2039-06-10 | 19 |
+| Jupiter | 2039-06-10 | 2039-06-28 | 17 |
 | Saturn | 2039-06-28 | 2039-07-18 | 20 |
 | Mercury | 2039-07-18 | 2039-08-05 | 18 |
 | Ketu | 2039-08-05 | 2039-08-12 | 7 |
@@ -3564,19 +4752,19 @@ No Debilitated Planets
 | Sun | 2042-09-05 | 2042-09-21 | 16 |
 | Moon | 2042-09-21 | 2042-10-17 | 26 |
 | Mars | 2042-10-17 | 2042-11-04 | 18 |
-| Rahu | 2042-11-04 | 2042-12-21 | 47 |
-| Jupiter | 2042-12-21 | 2043-01-31 | 41 |
+| Rahu | 2042-11-04 | 2042-12-20 | 47 |
+| Jupiter | 2042-12-20 | 2043-01-31 | 41 |
 | Saturn | 2043-01-31 | 2043-03-21 | 49 |
 | **Ketu** | 2043-03-21 | 2043-07-27 | 128 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
-| Ketu | 2043-03-21 | 2043-03-29 | 7 |
-| Venus | 2043-03-29 | 2043-04-19 | 21 |
+| Ketu | 2043-03-21 | 2043-03-28 | 7 |
+| Venus | 2043-03-28 | 2043-04-19 | 21 |
 | Sun | 2043-04-19 | 2043-04-25 | 6 |
 | Moon | 2043-04-25 | 2043-05-06 | 11 |
 | Mars | 2043-05-06 | 2043-05-13 | 7 |
-| Rahu | 2043-05-13 | 2043-06-02 | 19 |
-| Jupiter | 2043-06-02 | 2043-06-19 | 17 |
+| Rahu | 2043-05-13 | 2043-06-01 | 19 |
+| Jupiter | 2043-06-01 | 2043-06-19 | 17 |
 | Saturn | 2043-06-19 | 2043-07-09 | 20 |
 | Mercury | 2043-07-09 | 2043-07-27 | 18 |
 | **Venus** | 2043-07-27 | 2044-07-26 | 365 |
@@ -3595,22 +4783,22 @@ No Debilitated Planets
 #### Mahadasha: Moon (2044-07-26 - 2054-07-27)
 | Antardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
-| **Moon** | 2044-07-26 | 2045-05-27 | 304 |
+| **Moon** | 2044-07-26 | 2045-05-26 | 304 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
-| Moon | 2044-07-26 | 2044-08-21 | 25 |
-| Mars | 2044-08-21 | 2044-09-07 | 18 |
+| Moon | 2044-07-26 | 2044-08-20 | 25 |
+| Mars | 2044-08-20 | 2044-09-07 | 18 |
 | Rahu | 2044-09-07 | 2044-10-23 | 46 |
 | Jupiter | 2044-10-23 | 2044-12-02 | 41 |
 | Saturn | 2044-12-02 | 2045-01-20 | 48 |
 | Mercury | 2045-01-20 | 2045-03-04 | 43 |
 | Ketu | 2045-03-04 | 2045-03-22 | 18 |
 | Venus | 2045-03-22 | 2045-05-11 | 51 |
-| Sun | 2045-05-11 | 2045-05-27 | 15 |
-| **Mars** | 2045-05-27 | 2045-12-26 | 213 |
+| Sun | 2045-05-11 | 2045-05-26 | 15 |
+| **Mars** | 2045-05-26 | 2045-12-26 | 213 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
-| Mars | 2045-05-27 | 2045-06-08 | 12 |
+| Mars | 2045-05-26 | 2045-06-08 | 12 |
 | Rahu | 2045-06-08 | 2045-07-10 | 32 |
 | Jupiter | 2045-07-10 | 2045-08-07 | 28 |
 | Saturn | 2045-08-07 | 2045-09-10 | 34 |
@@ -3712,8 +4900,8 @@ No Debilitated Planets
 |---|---|---|---|
 | Mars | 2054-07-27 | 2054-08-04 | 9 |
 | Rahu | 2054-08-04 | 2054-08-27 | 22 |
-| Jupiter | 2054-08-27 | 2054-09-16 | 20 |
-| Saturn | 2054-09-16 | 2054-10-09 | 24 |
+| Jupiter | 2054-08-27 | 2054-09-15 | 20 |
+| Saturn | 2054-09-15 | 2054-10-09 | 24 |
 | Mercury | 2054-10-09 | 2054-10-30 | 21 |
 | Ketu | 2054-10-30 | 2054-11-08 | 9 |
 | Venus | 2054-11-08 | 2054-12-03 | 25 |
@@ -3776,8 +4964,8 @@ No Debilitated Planets
 | Moon | 2059-03-04 | 2059-03-17 | 12 |
 | Mars | 2059-03-17 | 2059-03-25 | 9 |
 | Rahu | 2059-03-25 | 2059-04-17 | 22 |
-| Jupiter | 2059-04-17 | 2059-05-07 | 20 |
-| Saturn | 2059-05-07 | 2059-05-30 | 24 |
+| Jupiter | 2059-04-17 | 2059-05-06 | 20 |
+| Saturn | 2059-05-06 | 2059-05-30 | 24 |
 | Mercury | 2059-05-30 | 2059-06-20 | 21 |
 | **Venus** | 2059-06-20 | 2060-08-19 | 426 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
@@ -3789,8 +4977,8 @@ No Debilitated Planets
 | Rahu | 2059-11-20 | 2060-01-23 | 64 |
 | Jupiter | 2060-01-23 | 2060-03-20 | 57 |
 | Saturn | 2060-03-20 | 2060-05-26 | 67 |
-| Mercury | 2060-05-26 | 2060-07-26 | 60 |
-| Ketu | 2060-07-26 | 2060-08-19 | 25 |
+| Mercury | 2060-05-26 | 2060-07-25 | 60 |
+| Ketu | 2060-07-25 | 2060-08-19 | 25 |
 | **Sun** | 2060-08-19 | 2060-12-25 | 128 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
@@ -3825,8 +5013,8 @@ No Debilitated Planets
 | Rahu | 2061-07-26 | 2061-12-21 | 148 |
 | Jupiter | 2061-12-21 | 2062-05-02 | 131 |
 | Saturn | 2062-05-02 | 2062-10-05 | 156 |
-| Mercury | 2062-10-05 | 2063-02-22 | 140 |
-| Ketu | 2063-02-22 | 2063-04-20 | 58 |
+| Mercury | 2062-10-05 | 2063-02-21 | 140 |
+| Ketu | 2063-02-21 | 2063-04-20 | 58 |
 | Venus | 2063-04-20 | 2063-10-01 | 164 |
 | Sun | 2063-10-01 | 2063-11-20 | 49 |
 | Moon | 2063-11-20 | 2064-02-10 | 82 |
@@ -3838,11 +5026,11 @@ No Debilitated Planets
 | Saturn | 2064-08-02 | 2064-12-19 | 139 |
 | Mercury | 2064-12-19 | 2065-04-22 | 124 |
 | Ketu | 2065-04-22 | 2065-06-12 | 51 |
-| Venus | 2065-06-12 | 2065-11-06 | 146 |
-| Sun | 2065-11-06 | 2065-12-19 | 44 |
+| Venus | 2065-06-12 | 2065-11-05 | 146 |
+| Sun | 2065-11-05 | 2065-12-19 | 44 |
 | Moon | 2065-12-19 | 2066-03-02 | 73 |
-| Mars | 2066-03-02 | 2066-04-23 | 51 |
-| Rahu | 2066-04-23 | 2066-09-01 | 131 |
+| Mars | 2066-03-02 | 2066-04-22 | 51 |
+| Rahu | 2066-04-22 | 2066-09-01 | 131 |
 | **Saturn** | 2066-09-01 | 2069-07-08 | 1041 |
 | Pratyantardasha Lord | Start Date | End Date | Duration |
 |---|---|---|---|
@@ -3884,8 +5072,8 @@ No Debilitated Planets
 |---|---|---|---|
 | Venus | 2073-02-12 | 2073-08-13 | 183 |
 | Sun | 2073-08-13 | 2073-10-07 | 55 |
-| Moon | 2073-10-07 | 2074-01-07 | 91 |
-| Mars | 2074-01-07 | 2074-03-11 | 64 |
+| Moon | 2073-10-07 | 2074-01-06 | 91 |
+| Mars | 2074-01-06 | 2074-03-11 | 64 |
 | Rahu | 2074-03-11 | 2074-08-23 | 164 |
 | Jupiter | 2074-08-23 | 2075-01-16 | 146 |
 | Saturn | 2075-01-16 | 2075-07-08 | 173 |
