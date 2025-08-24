@@ -1,8 +1,8 @@
 # Project Context Bundle
 
 
-- Generated: **2025-08-24 03:50:05Z UTC**
-- Commit: `c60738c6f2c2ca1f8c07a667d33175bc59b83b9e`
+- Generated: **2025-08-24 04:57:57Z UTC**
+- Commit: `becfa349d0d3f76d21e6d2f0963ad336ac3845aa`
 - Note: Adjust the list below to include/exclude files. You can add globs too.
 
 ## Table of Contents
@@ -214,6 +214,7 @@ __all__ = ["api_bp", "register_error_handlers"]
 from extensions import db
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import JSON
+from sqlalchemy.ext.mutable import MutableDict
 from datetime import datetime, timezone
 from extensions import db
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -371,9 +372,9 @@ class ConsultationHistory(db.Model):
 class KnowledgeBaseSystems(db.Model):
     __tablename__ = 'knowledge_base_systems'
     system_name = db.Column(db.String(255), primary_key=True)
-    data_en = db.Column(JSONB, nullable=False)
-    data_hi = db.Column(JSONB, nullable=False)
-    data_hinglish = db.Column(JSONB, nullable=False)
+    data_en = db.Column(MutableDict.as_mutable(JSONB), nullable=False)
+    data_hi = db.Column(MutableDict.as_mutable(JSONB), nullable=False)
+    data_hinglish = db.Column(MutableDict.as_mutable(JSONB), nullable=False)
 
     def __repr__(self):
         return f'<KnowledgeBaseSystems {self.system_name}>'
@@ -382,9 +383,9 @@ class KnowledgeBaseInterpretations(db.Model):
     __tablename__ = 'knowledge_base_interpretations'
     category = db.Column(db.Text, nullable=False)
     key = db.Column(db.Text, nullable=False)
-    data_en = db.Column(JSONB, nullable=False)
-    data_hi = db.Column(JSONB, nullable=False)
-    data_hinglish = db.Column(JSONB, nullable=False)
+    data_en = db.Column(MutableDict.as_mutable(JSONB), nullable=False)
+    data_hi = db.Column(MutableDict.as_mutable(JSONB), nullable=False)
+    data_hinglish = db.Column(MutableDict.as_mutable(JSONB), nullable=False)
 
     __table_args__ = (db.PrimaryKeyConstraint('category', 'key', name='pk_knowledge_base_interpretations'),)
 
